@@ -160,12 +160,12 @@ $(OBJ)/Core/%.c.o: Core/%.c
 $(OBJ)/%.c.o: %.c
 	-@$(MKDIR) -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
-	
+
 # HexFiend requires more flags
 $(OBJ)/HexFiend/%.m.o: HexFiend/%.m
 	-@$(MKDIR) -p $(dir $@)
 	$(CC) $(CFLAGS) $(OCFLAGS) -c $< -o $@ -fno-objc-arc -include HexFiend/HexFiend_2_Framework_Prefix.pch
-	
+
 $(OBJ)/%.m.o: %.m
 	-@$(MKDIR) -p $(dir $@)
 	$(CC) $(CFLAGS) $(OCFLAGS) -c $< -o $@
@@ -201,7 +201,7 @@ endif
 
 $(BIN)/SameBoy.app/Contents/Resources/Base.lproj/%.nib: Cocoa/%.xib
 	ibtool --compile $@ $^
-	
+
 # Quick Look generator
 
 $(BIN)/SameBoy.qlgenerator: $(BIN)/SameBoy.qlgenerator/Contents/MacOS/SameBoyQL \
@@ -226,7 +226,7 @@ endif
 $(BIN)/SameBoy.qlgenerator/Contents/Resources/cgb_boot_fast.bin: $(BIN)/BootROMs/cgb_boot_fast.bin
 	-@$(MKDIR) -p $(dir $@)
 	cp -f $^ $@
-	
+
 # SDL Port
 
 # Unix versions build only one binary
@@ -253,7 +253,7 @@ $(OBJ)/%.o: %.rc
 else
 $(OBJ)/%.res: %.rc
 	-@$(MKDIR) -p $(dir $@)
-	rc /fo $@ /dVERSION=\"$(VERSION)\" $^ 
+	rc /fo $@ /dVERSION=\"$(VERSION)\" $^
 
 %.o: %.res
 	cvtres /OUT:"$@" $^
@@ -280,11 +280,11 @@ $(BIN)/tester/sameboy_tester.exe: $(CORE_OBJECTS) $(SDL_OBJECTS)
 $(BIN)/SDL/%.bin $(BIN)/tester/%.bin: $(BOOTROMS_DIR)/%.bin
 	-@$(MKDIR) -p $(dir $@)
 	cp -f $^ $@
-	
+
 $(BIN)/SameBoy.app/Contents/Resources/%.bin: $(BOOTROMS_DIR)/%.bin
 	-@$(MKDIR) -p $(dir $@)
 	cp -f $^ $@
-	
+
 $(BIN)/SDL/LICENSE: LICENSE
 	-@$(MKDIR) -p $(dir $@)
 	cp -f $^ $@
@@ -292,7 +292,7 @@ $(BIN)/SDL/LICENSE: LICENSE
 $(BIN)/SDL/registers.sym: Misc/registers.sym
 	-@$(MKDIR) -p $(dir $@)
 	cp -f $^ $@
-	
+
 $(BIN)/SDL/background.bmp: SDL/background.bmp
 	-@$(MKDIR) -p $(dir $@)
 	cp -f $^ $@
@@ -313,7 +313,7 @@ $(BIN)/BootROMs/%.bin: BootROMs/%.asm
 # Libretro Core (uses its own build system)
 libretro:
 	$(MAKE) -C libretro
-	
+
 # Clean
 clean:
 	rm -rf build

@@ -3,7 +3,7 @@
 
 #include <SDL2/SDL.h>
 #include <Core/gb.h>
-#include <stdbool.h> 
+#include <stdbool.h>
 #include "shader.h"
 
 #define JOYSTICK_HIGH 0x4000
@@ -65,13 +65,13 @@ typedef struct {
     GB_color_correction_mode_t color_correction_mode;
     enum scaling_mode scaling_mode;
     bool blend_frames;
-    
+
     GB_highpass_mode_t highpass_mode;
-    
+
     bool _deprecated_div_joystick;
     bool _deprecated_flip_joystick_bit_1;
     bool _deprecated_swap_joysticks_bits_1_and_2;
-    
+
     char filter[32];
     enum {
         MODEL_DMG,
@@ -79,7 +79,7 @@ typedef struct {
         MODEL_AGB,
         MODEL_MAX,
     } model;
-    
+
     /* v0.11 */
     uint32_t rewind_length;
     SDL_Scancode keys_2[32]; /* Rewind and underclock, + padding for the future */

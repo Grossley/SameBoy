@@ -120,20 +120,20 @@ static void handle_events(GB_gameboy_t *gb)
             case SDL_QUIT:
                 pending_command = GB_SDL_QUIT_COMMAND;
                 break;
-                
+
             case SDL_DROPFILE: {
                 set_filename(event.drop.file, true);
                 pending_command = GB_SDL_NEW_FILE_COMMAND;
                 break;
             }
-                
+
             case SDL_WINDOWEVENT: {
                 if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
                     update_viewport();
                 }
                 break;
             }
-                
+
             case SDL_JOYBUTTONUP:
             case SDL_JOYBUTTONDOWN: {
                 joypad_button_t button = get_joypad_button(event.jbutton.button);
@@ -159,7 +159,7 @@ static void handle_events(GB_gameboy_t *gb)
                 }
             }
             break;
-                
+
             case SDL_JOYAXISMOTION: {
                 static bool axis_active[2] = {false, false};
                 joypad_axis_t axis = get_joypad_axis(event.jaxis.axis);
@@ -207,14 +207,14 @@ static void handle_events(GB_gameboy_t *gb)
                     value == SDL_HAT_LEFTUP || value == SDL_HAT_UP || value == SDL_HAT_RIGHTUP ? -1 : (value == SDL_HAT_LEFTDOWN || value == SDL_HAT_DOWN || value == SDL_HAT_RIGHTDOWN ? 1 : 0);
                 int8_t leftright =
                     value == SDL_HAT_LEFTUP || value == SDL_HAT_LEFT || value == SDL_HAT_LEFTDOWN ? -1 : (value == SDL_HAT_RIGHTUP || value == SDL_HAT_RIGHT || value == SDL_HAT_RIGHTDOWN ? 1 : 0);
-                
+
                 GB_set_key_state(gb, GB_KEY_LEFT, leftright == -1);
                 GB_set_key_state(gb, GB_KEY_RIGHT, leftright == 1);
                 GB_set_key_state(gb, GB_KEY_UP, updown == -1);
                 GB_set_key_state(gb, GB_KEY_DOWN, updown == 1);
                 break;
            };
-                
+
             case SDL_KEYDOWN:
                 switch (event.key.keysym.scancode) {
                     case SDL_SCANCODE_ESCAPE: {
@@ -224,22 +224,22 @@ static void handle_events(GB_gameboy_t *gb)
                     case SDL_SCANCODE_C:
                         if (event.type == SDL_KEYDOWN && (event.key.keysym.mod & KMOD_CTRL)) {
                             GB_debugger_break(gb);
-                            
+
                         }
                         break;
-                        
+
                     case SDL_SCANCODE_R:
                         if (event.key.keysym.mod & MODIFIER) {
                             pending_command = GB_SDL_RESET_COMMAND;
                         }
                         break;
-                    
+
                     case SDL_SCANCODE_P:
                         if (event.key.keysym.mod & MODIFIER) {
                             paused = !paused;
                         }
                         break;
-                        
+
                     case SDL_SCANCODE_M:
                         if (event.key.keysym.mod & MODIFIER) {
 #ifdef __APPLE__
@@ -257,24 +257,24 @@ static void handle_events(GB_gameboy_t *gb)
                             }
                         }
                     break;
-                    
+
                     case SDL_SCANCODE_F:
                         if (event.key.keysym.mod & MODIFIER) {
                             if ((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) == false) {
                                 SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
                             }
-                            else { 
+                            else {
                                 SDL_SetWindowFullscreen(window, 0);
                             }
                         }
                         break;
-                        
+
                     default:
                         /* Save states */
                         if (event.key.keysym.scancode >= SDL_SCANCODE_1 && event.key.keysym.scancode <= SDL_SCANCODE_0) {
                             if (event.key.keysym.mod & MODIFIER) {
                                 command_parameter = (event.key.keysym.scancode - SDL_SCANCODE_1 + 1) % 10;
-                                
+
                                 if (event.key.keysym.mod & KMOD_SHIFT) {
                                     pending_command = GB_SDL_LOAD_STATE_COMMAND;
                                 }
@@ -365,7 +365,7 @@ static void audio_callback(void *gb, Uint8 *stream, int len)
         memset(stream, 0, len);
     }
 }
-    
+
 static bool handle_pending_command(void)
 {
     switch (pending_command) {
@@ -375,7 +375,7 @@ static bool handle_pending_command(void)
             char save_extension[] = ".s0";
             save_extension[2] += command_parameter;
             replace_extension(filename, strlen(filename), save_path, save_extension);
-            
+
             start_capturing_logs();
             if (pending_command == GB_SDL_LOAD_STATE_COMMAND) {
                 GB_load_state(&gb, save_path);
@@ -386,17 +386,17 @@ static bool handle_pending_command(void)
             end_capturing_logs(true, false);
             return false;
         }
-            
+
         case GB_SDL_RESET_COMMAND:
             GB_save_battery(&gb, battery_save_path_ptr);
             return true;
-            
+
         case GB_SDL_NO_COMMAND:
             return false;
-            
+
         case GB_SDL_NEW_FILE_COMMAND:
             return true;
-            
+
         case GB_SDL_QUIT_COMMAND:
             GB_save_battery(&gb, battery_save_path_ptr);
             exit(0);
@@ -413,7 +413,7 @@ restart:
     }
     else {
         GB_init(&gb, sdl_to_internal_model[configuration.model]);
-        
+
         GB_set_vblank_callback(&gb, (GB_vblank_callback_t) vblank);
         GB_set_pixels_output(&gb, active_pixel_buffer);
         GB_set_rgb_encode_callback(&gb, rgb_encode);
@@ -422,32 +422,32 @@ restart:
         GB_set_highpass_filter_mode(&gb, configuration.highpass_mode);
         GB_set_rewind_length(&gb, configuration.rewind_length);
     }
-    
+
     bool error = false;
     start_capturing_logs();
     const char * const boot_roms[] = {"dmg_boot.bin", "cgb_boot.bin", "agb_boot.bin"};
     error = GB_load_boot_rom(&gb, resource_path(boot_roms[configuration.model]));
     end_capturing_logs(true, error);
-    
+
     start_capturing_logs();
     error = GB_load_rom(&gb, filename);
     end_capturing_logs(true, error);
-    
+
     size_t path_length = strlen(filename);
-    
+
     /* Configure battery */
     char battery_save_path[path_length + 5]; /* At the worst case, size is strlen(path) + 4 bytes for .sav + NULL */
     replace_extension(filename, path_length, battery_save_path, ".sav");
     battery_save_path_ptr = battery_save_path;
     GB_load_battery(&gb, battery_save_path);
-    
+
     /* Configure symbols */
     GB_debugger_load_symbol_file(&gb, resource_path("registers.sym"));
-    
+
     char symbols_path[path_length + 5];
     replace_extension(filename, path_length, symbols_path, ".sym");
     GB_debugger_load_symbol_file(&gb, symbols_path);
-    
+
     /* Run emulation */
     while (true) {
         if (paused || rewind_paused) {
@@ -467,7 +467,7 @@ restart:
             }
             GB_run(&gb);
         }
-        
+
         /* These commands can't run in the handle_event function, because they're not safe in a vblank context. */
         if (handle_pending_command()) {
             pending_command = GB_SDL_NO_COMMAND;
@@ -505,14 +505,14 @@ int main(int argc, char **argv)
 #define str(x) #x
 #define xstr(x) str(x)
     fprintf(stderr, "SameBoy v" xstr(VERSION) "\n");
-    
+
     bool fullscreen = get_arg_flag("--fullscreen", &argc, argv);
 
     if (argc > 2) {
         fprintf(stderr, "Usage: %s [--fullscreen] [rom]\n", argv[0]);
         exit(1);
     }
-    
+
     if (argc == 2) {
         filename = argv[1];
     }
@@ -520,7 +520,7 @@ int main(int argc, char **argv)
     signal(SIGINT, debugger_interrupt);
 
     SDL_Init(SDL_INIT_EVERYTHING);
-    
+
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -528,22 +528,22 @@ int main(int argc, char **argv)
     window = SDL_CreateWindow("SameBoy v" xstr(VERSION), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                               160 * 2, 144 * 2, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_SetWindowMinimumSize(window, 160, 144);
-    
+
     if (fullscreen) {
         SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
     }
-    
+
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
-    
+
     GLint major = 0, minor = 0;
     glGetIntegerv(GL_MAJOR_VERSION, &major);
     glGetIntegerv(GL_MINOR_VERSION, &minor);
-    
+
     if (major * 0x100 + minor < 0x302) {
         SDL_GL_DeleteContext(gl_context);
         gl_context = NULL;
     }
-    
+
     if (gl_context == NULL) {
         renderer = SDL_CreateRenderer(window, -1, 0);
         texture = SDL_CreateTexture(renderer, SDL_GetWindowPixelFormat(window), SDL_TEXTUREACCESS_STREAMING, 160, 144);
@@ -552,19 +552,19 @@ int main(int argc, char **argv)
     else {
         pixel_format = SDL_AllocFormat(SDL_PIXELFORMAT_ABGR8888);
     }
-    
-    
+
+
     /* Configure Audio */
     memset(&want_aspec, 0, sizeof(want_aspec));
     want_aspec.freq = AUDIO_FREQUENCY;
     want_aspec.format = AUDIO_S16SYS;
     want_aspec.channels = 2;
     want_aspec.samples = 512;
-    
+
     SDL_version _sdl_version;
     SDL_GetVersion(&_sdl_version);
     unsigned sdl_version = _sdl_version.major * 1000 + _sdl_version.minor * 100 + _sdl_version.patch;
-    
+
 #ifndef _WIN32
     /* SDL 2.0.5 on macOS and Linux introduced a bug where certain combinations of buffer lengths and frequencies
        fail to produce audio correctly. */
@@ -583,20 +583,20 @@ int main(int argc, char **argv)
         want_aspec.freq = 44100;
     }
 #endif
-    
+
 
     want_aspec.callback = audio_callback;
     want_aspec.userdata = &gb;
     device_id = SDL_OpenAudioDevice(0, 0, &want_aspec, &have_aspec, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
-    
+
     /* Start Audio */
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
-    
+
     char *prefs_dir = SDL_GetPrefPath("", "SameBoy");
     snprintf(prefs_path, sizeof(prefs_path) - 1, "%sprefs.bin", prefs_dir);
     SDL_free(prefs_dir);
-    
+
     FILE *prefs_file = fopen(prefs_path, "rb");
     if (prefs_file) {
         fread(&configuration, 1, sizeof(configuration), prefs_file);
@@ -605,14 +605,14 @@ int main(int argc, char **argv)
     if (configuration.model >= MODEL_MAX) {
         configuration.model = MODEL_CGB;
     }
-    
+
     atexit(save_configuration);
-    
+
     if (!init_shader_with_name(&shader, configuration.filter)) {
         init_shader_with_name(&shader, "NearestNeighbor");
     }
     update_viewport();
-    
+
     if (filename == NULL) {
         run_gui(false);
     }
