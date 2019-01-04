@@ -150,7 +150,7 @@ void WGB_update_hardware_scroll(wide_gb *wide_gb, int scx, int scy)
     delta.y = new_hardware_pos.y - wide_gb->hardware_pos.y;
 
     // Apply heuristic to tell if the background position wrapped into the other side
-    const int fuzz = 10;
+    const int fuzz = 20;
     const int threshold = BACKGROUND_SIZE - fuzz;
     // 255 -> 0 | delta.x is negative: we are going right
     // 0 -> 255 | delta.x is positive: we are going left

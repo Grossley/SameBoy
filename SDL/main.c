@@ -383,6 +383,11 @@ uint64_t frame_average_hash(uint32_t *pixels)
 
 static void vblank(GB_gameboy_t *gb)
 {
+    int gameplayMode        = ((uint8_t *)GB_get_direct_access(gb, GB_DIRECT_ACCESS_RAM, NULL, NULL))[0xDB95 - 0xC000];
+    int roomTransitionState = ((uint8_t *)GB_get_direct_access(gb, GB_DIRECT_ACCESS_RAM, NULL, NULL))[0xC124 - 0xC000];
+    bool isDuringRoomTransition = gameplayMode == 0x0B /* World */ && roomTransitionState != 0;
+    GB_set_turbo_mode(gb, isDuringRoomTransition, false);
+
     // Adjust clock speed
     if (underclock_down && clock_mutliplier > 0.5) {
         clock_mutliplier -= 0.1;
@@ -410,7 +415,7 @@ static void vblank(GB_gameboy_t *gb)
 
     // Present frame
     if (configuration.blend_frames) {
-        render_texture(active_pixel_buffer, previous_pixel_buffer);
+        render_texture(active_pixel_buffer, previous_pixel_buffer, gb);
         // swap active and previous frame
         uint32_t *temp = active_pixel_buffer;
         active_pixel_buffer = previous_pixel_buffer;
@@ -418,7 +423,7 @@ static void vblank(GB_gameboy_t *gb)
         GB_set_pixels_output(gb, active_pixel_buffer);
     }
     else {
-        render_texture(active_pixel_buffer, NULL);
+        render_texture(active_pixel_buffer, NULL, gb);
     }
 
     do_rewind = rewind_down;

@@ -80,8 +80,18 @@ SDL_Rect window_to_screen_rect(SDL_Rect window_rect)
     return result;
 }
 
-void render_texture_sdl(void *pixels, void *previous)
+void render_texture_sdl(void *pixels, void *previous, GB_gameboy_t *gb)
 {
+    // HACK: Zelda: scroll viewport by link's position
+    int gameplayMode = ((uint8_t *)GB_get_direct_access(gb, GB_DIRECT_ACCESS_RAM, NULL, NULL))[0xDB95 - 0xC000];
+    int linkScrollX = ((uint8_t *)GB_get_direct_access(gb, GB_DIRECT_ACCESS_HRAM, NULL, NULL))[0xFF9F - 0xFF80];
+    int linkScrollY = ((uint8_t *)GB_get_direct_access(gb, GB_DIRECT_ACCESS_HRAM, NULL, NULL))[0xFFA0 - 0xFF80];
+    if (gameplayMode == 0x0B /* World */) {
+      struct scale viewport_scale = compute_viewport_scale();
+      update_viewport();
+      viewport = WGB_offset_rect(viewport, (160/2 - linkScrollX) * viewport_scale.x, (144/2 - linkScrollY) * viewport_scale.y);
+    }
+
     // 1. Clear the surface
     SDL_SetTextureBlendMode(screen_texture, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0xff);
@@ -181,10 +191,10 @@ void render_texture_gl(void *pixels, void *previous)
     SDL_GL_SwapWindow(window);
 }
 
-void render_texture(void *pixels, void *previous)
+void render_texture(void *pixels, void *previous, GB_gameboy_t *gb)
 {
     if (renderer) {
-        render_texture_sdl(pixels, previous);
+        render_texture_sdl(pixels, previous, gb);
     } else {
         render_texture_gl(pixels, previous);
     }
@@ -550,7 +560,7 @@ void cycle_scaling(unsigned index)
         configuration.scaling_mode = 0;
     }
     update_viewport();
-    render_texture(NULL, NULL);
+    render_texture(NULL, NULL, NULL);
 }
 
 void cycle_scaling_backwards(unsigned index)
@@ -562,7 +572,7 @@ void cycle_scaling_backwards(unsigned index)
         configuration.scaling_mode--;
     }
     update_viewport();
-    render_texture(NULL, NULL);
+    render_texture(NULL, NULL, NULL);
 }
 
 static void cycle_color_correction(unsigned index)
@@ -1023,7 +1033,7 @@ void run_gui(bool is_running)
             case SDL_WINDOWEVENT: {
                 if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
                     update_viewport();
-                    render_texture(NULL, NULL);
+                    render_texture(NULL, NULL, NULL);
                 }
                 break;
             }
@@ -1224,7 +1234,7 @@ void run_gui(bool is_running)
                     break;
             }
 
-            render_texture(pixels, NULL);
+            render_texture(pixels, NULL, NULL);
         }
     } while (SDL_WaitEvent(&event));
 }
