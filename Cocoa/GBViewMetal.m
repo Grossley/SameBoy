@@ -1,13 +1,7 @@
+#import <CoreImage/CoreImage.h>
 #import "GBViewMetal.h"
+#pragma clang diagnostic ignored "-Wpartial-availability"
 
-#define WIDTH 160
-#define HEIGHT 144
-#define PITCH (160 * 4)
-
-static const MTLRegion region = {
-    {0, 0, 0},         // MTLOrigin
-    {WIDTH, HEIGHT, 1} // MTLSize
-};
 
 static const vector_float2 rect[] =
 {
@@ -24,7 +18,7 @@ static const vector_float2 rect[] =
     id<MTLBuffer> vertices;
     id<MTLRenderPipelineState> pipeline_state;
     id<MTLCommandQueue> command_queue;
-    id<MTLBuffer> mix_previous_buffer;
+    id<MTLBuffer> frame_blending_mode_buffer;
     id<MTLBuffer> output_resolution_buffer;
     vector_float2 output_resolution;
 }
@@ -37,31 +31,39 @@ static const vector_float2 rect[] =
     return false;
 }
 
-- (void)createInternalView
+- (void) allocateTextures
 {
-    MTKView *view = [[MTKView alloc] initWithFrame:self.frame device:(device = MTLCreateSystemDefaultDevice())];
-    view.delegate = self;
-    self.internalView = view;
-    view.paused = YES;
+    if (!device) return;
     
     MTLTextureDescriptor *texture_descriptor = [[MTLTextureDescriptor alloc] init];
     
     texture_descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
     
-    texture_descriptor.width = WIDTH;
-    texture_descriptor.height = HEIGHT;
+    texture_descriptor.width = GB_get_screen_width(self.gb);
+    texture_descriptor.height = GB_get_screen_height(self.gb);
     
     texture = [device newTextureWithDescriptor:texture_descriptor];
     previous_texture = [device newTextureWithDescriptor:texture_descriptor];
+
+}
+
+- (void)createInternalView
+{
+    MTKView *view = [[MTKView alloc] initWithFrame:self.frame device:(device = MTLCreateSystemDefaultDevice())];
+    view.delegate = self;
+    self.internalView = view;
+    view.paused = true;
+    view.enableSetNeedsDisplay = true;
+    view.framebufferOnly = false;
     
     vertices = [device newBufferWithBytes:rect
                                    length:sizeof(rect)
                                   options:MTLResourceStorageModeShared];
     
-    static const bool default_mix_value = false;
-    mix_previous_buffer = [device newBufferWithBytes:&default_mix_value
-                                              length:sizeof(default_mix_value)
-                                             options:MTLResourceStorageModeShared];
+    static const GB_frame_blending_mode_t default_blending_mode = GB_FRAME_BLENDING_MODE_DISABLED;
+    frame_blending_mode_buffer = [device newBufferWithBytes:&default_blending_mode
+                                          length:sizeof(default_blending_mode)
+                                         options:MTLResourceStorageModeShared];
     
     output_resolution_buffer = [device newBufferWithBytes:&output_resolution
                                                    length:sizeof(output_resolution)
@@ -92,7 +94,7 @@ static const vector_float2 rect[] =
                                                              withString:scaler_source];
 
     MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
-    options.fastMathEnabled = YES;
+    options.fastMathEnabled = true;
     id<MTLLibrary> library = [device newLibraryWithSource:shader_source
                                                    options:options
                                                      error:&error];
@@ -123,7 +125,7 @@ static const vector_float2 rect[] =
     command_queue = [device newCommandQueue];
 }
 
-- (void)mtkView:(nonnull MTKView *)view drawableSizeWillChange:(CGSize)size
+- (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size
 {
     output_resolution = (vector_float2){size.width, size.height};
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -131,26 +133,36 @@ static const vector_float2 rect[] =
     });
 }
 
-- (void)drawInMTKView:(nonnull MTKView *)view
+- (void)drawInMTKView:(MTKView *)view
 {
     if (!(view.window.occlusionState & NSWindowOcclusionStateVisible)) return;
+    if (!self.gb) return;
+    if (texture.width  != GB_get_screen_width(self.gb) ||
+        texture.height != GB_get_screen_height(self.gb)) {
+        [self allocateTextures];
+    }
+    
+    MTLRegion region = {
+        {0, 0, 0},         // MTLOrigin
+        {texture.width, texture.height, 1} // MTLSize
+    };
+
     [texture replaceRegion:region
                mipmapLevel:0
                  withBytes:[self currentBuffer]
-               bytesPerRow:PITCH];
-    if ([self shouldBlendFrameWithPrevious]) {
+               bytesPerRow:texture.width * 4];
+    if ([self frameBlendingMode]) {
         [previous_texture replaceRegion:region
                             mipmapLevel:0
                               withBytes:[self previousBuffer]
-                            bytesPerRow:PITCH];
+                            bytesPerRow:texture.width * 4];
     }
     
     MTLRenderPassDescriptor *render_pass_descriptor = view.currentRenderPassDescriptor;
     id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
 
-    if(render_pass_descriptor != nil)
-    {
-        *(bool *)[mix_previous_buffer contents] = [self shouldBlendFrameWithPrevious];
+    if (render_pass_descriptor != nil) { 
+        *(GB_frame_blending_mode_t *)[frame_blending_mode_buffer contents] = [self frameBlendingMode];
         *(vector_float2 *)[output_resolution_buffer contents] = output_resolution;
 
         id<MTLRenderCommandEncoder> render_encoder =
@@ -167,7 +179,7 @@ static const vector_float2 rect[] =
                                  offset:0
                                 atIndex:0];
         
-        [render_encoder setFragmentBuffer:mix_previous_buffer
+        [render_encoder setFragmentBuffer:frame_blending_mode_buffer
                                    offset:0
                                   atIndex:0];
         
@@ -198,8 +210,23 @@ static const vector_float2 rect[] =
 {
     [super flip];
     dispatch_async(dispatch_get_main_queue(), ^{
-        [(MTKView *)self.internalView draw];
+        [(MTKView *)self.internalView setNeedsDisplay:true];
     });
+}
+
+- (NSImage *)renderToImage
+{
+    CIImage *ciImage = [CIImage imageWithMTLTexture:[[(MTKView *)self.internalView currentDrawable] texture]
+                                            options:@{
+                                                kCIImageColorSpace: (__bridge_transfer id)CGColorSpaceCreateDeviceRGB()
+                                            }];
+    ciImage = [ciImage imageByApplyingTransform:CGAffineTransformTranslate(CGAffineTransformMakeScale(1, -1),
+                                                                           0, ciImage.extent.size.height)];
+    CIContext *context = [CIContext context];
+    CGImageRef cgImage = [context createCGImage:ciImage fromRect:ciImage.extent];
+    NSImage *ret = [[NSImage alloc] initWithCGImage:cgImage size:self.internalView.bounds.size];
+    CGImageRelease(cgImage);
+    return ret;
 }
 
 @end

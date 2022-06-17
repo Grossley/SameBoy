@@ -1,7 +1,7 @@
 #ifndef gui_h
 #define gui_h
 
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <Core/gb.h>
 #include <stdbool.h> 
 #include "shader.h"
@@ -9,12 +9,19 @@
 #define JOYSTICK_HIGH 0x4000
 #define JOYSTICK_LOW 0x3800
 
+#ifdef __APPLE__
+#define MODIFIER KMOD_GUI
+#else
+#define MODIFIER KMOD_CTRL
+#endif
+
 extern GB_gameboy_t gb;
 
 extern SDL_Window *window;
 extern SDL_Renderer *renderer;
 extern SDL_Texture *texture;
 extern SDL_PixelFormat *pixel_format;
+extern SDL_Haptic *haptic;
 extern shader_t shader;
 
 enum scaling_mode {
@@ -32,15 +39,18 @@ enum pending_command {
     GB_SDL_RESET_COMMAND,
     GB_SDL_NEW_FILE_COMMAND,
     GB_SDL_QUIT_COMMAND,
+    GB_SDL_LOAD_STATE_FROM_FILE_COMMAND,
 };
 
+#define GB_SDL_DEFAULT_SCALE_MAX 8
 
 extern enum pending_command pending_command;
 extern unsigned command_parameter;
+extern char *dropped_state_file;
 
 typedef enum {
-    JOYPAD_BUTTON_LEFT,
     JOYPAD_BUTTON_RIGHT,
+    JOYPAD_BUTTON_LEFT,
     JOYPAD_BUTTON_UP,
     JOYPAD_BUTTON_DOWN,
     JOYPAD_BUTTON_A,
@@ -64,7 +74,7 @@ typedef struct {
     SDL_Scancode keys[9];
     GB_color_correction_mode_t color_correction_mode;
     enum scaling_mode scaling_mode;
-    bool blend_frames;
+    uint8_t blending_mode;
     
     GB_highpass_mode_t highpass_mode;
     
@@ -77,6 +87,8 @@ typedef struct {
         MODEL_DMG,
         MODEL_CGB,
         MODEL_AGB,
+        MODEL_SGB,
+        MODEL_MGB,
         MODEL_MAX,
     } model;
     
@@ -85,6 +97,35 @@ typedef struct {
     SDL_Scancode keys_2[32]; /* Rewind and underclock, + padding for the future */
     uint8_t joypad_configuration[32]; /* 12 Keys + padding for the future*/;
     uint8_t joypad_axises[JOYPAD_AXISES_MAX];
+    
+    /* v0.12 */
+    enum {
+        SGB_NTSC,
+        SGB_PAL,
+        SGB_2,
+        SGB_MAX
+    } sgb_revision;
+    
+    /* v0.13 */
+    uint8_t dmg_palette;
+    GB_border_mode_t border_mode;
+    uint8_t volume;
+    GB_rumble_mode_t rumble_mode;
+
+    uint8_t default_scale;
+    
+    /* v0.14 */
+    unsigned padding;
+    uint8_t color_temperature;
+    char bootrom_path[4096];
+    uint8_t interference_volume;
+    GB_rtc_mode_t rtc_mode;
+    
+    /* v0.14.4 */
+    bool osd;
+    
+    /* v0.15 */
+    bool allow_mouse_controls;
 } configuration_t;
 
 extern configuration_t configuration;
@@ -96,5 +137,21 @@ void connect_joypad(void);
 
 joypad_button_t get_joypad_button(uint8_t physical_button);
 joypad_axis_t get_joypad_axis(uint8_t physical_axis);
+
+static SDL_Scancode event_hotkey_code(SDL_Event *event)
+{
+    if (event->key.keysym.sym >= SDLK_a && event->key.keysym.sym < SDLK_z) {
+        return SDL_SCANCODE_A + event->key.keysym.sym - SDLK_a;
+    }
+    
+    return event->key.keysym.scancode;
+}
+
+void draw_text(uint32_t *buffer, unsigned width, unsigned height, unsigned x, signed y, const char *string, uint32_t color, uint32_t border, bool is_osd);
+void show_osd_text(const char *text);
+extern const char *osd_text;
+extern unsigned osd_countdown;
+extern unsigned osd_text_lines;
+void convert_mouse_coordinates(signed *x, signed *y);
 
 #endif

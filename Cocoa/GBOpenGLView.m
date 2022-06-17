@@ -4,7 +4,8 @@
 
 @implementation GBOpenGLView
 
-- (void)drawRect:(NSRect)dirtyRect {
+- (void)drawRect:(NSRect)dirtyRect 
+{
     if (!self.shader) {
         self.shader = [[GBGLShader alloc] initWithName:[[NSUserDefaults standardUserDefaults] objectForKey:@"GBFilter"]];
     }
@@ -13,17 +14,13 @@
     double scale = self.window.backingScaleFactor;
     glViewport(0, 0, self.bounds.size.width * scale, self.bounds.size.height * scale);
     
-    if (gbview.shouldBlendFrameWithPrevious) {
+    if (gbview.gb) {
         [self.shader renderBitmap:gbview.currentBuffer
-                         previous:gbview.previousBuffer
+                         previous:gbview.frameBlendingMode? gbview.previousBuffer : NULL
+                            sized:NSMakeSize(GB_get_screen_width(gbview.gb), GB_get_screen_height(gbview.gb))
                            inSize:self.bounds.size
-                            scale:scale];
-    }
-    else {
-        [self.shader renderBitmap:gbview.currentBuffer
-                         previous:NULL
-                           inSize:self.bounds.size
-                            scale:scale];
+                            scale:scale
+                 withBlendingMode:gbview.frameBlendingMode];
     }
     glFlush();
 }
@@ -37,6 +34,6 @@
 - (void) filterChanged
 {
     self.shader = nil;
-    [self setNeedsDisplay:YES];
+    [self setNeedsDisplay:true];
 }
 @end
