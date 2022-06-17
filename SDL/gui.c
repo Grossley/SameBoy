@@ -16,7 +16,7 @@ static uint32_t gui_palette_native[4];
 
 SDL_Window *window = NULL;
 SDL_Renderer *renderer = NULL;
-SDL_Texture *window_texture = NULL;
+SDL_Texture *texture = NULL;
 SDL_Surface *active_window_surface = NULL;
 SDL_Surface *previous_window_surface = NULL;
 SDL_Surface *screen_surface = NULL;
@@ -96,12 +96,12 @@ void render_surface_sdl(SDL_Surface *surface, SDL_Surface *previous_surface)
     // Convert the surface to a texture
     uint32_t *window_pixels;
     int pitch;
-    SDL_LockTexture(window_texture, NULL, (void**)&window_pixels, &pitch);
+    SDL_LockTexture(texture, NULL, (void**)&window_pixels, &pitch);
     memcpy(window_pixels, surface->pixels, drawable_rect_in_screen.w * drawable_rect_in_screen.h * sizeof (uint32_t));
-    SDL_UnlockTexture(window_texture);
+    SDL_UnlockTexture(texture);
 
     // Render the scaled texture
-    SDL_RenderCopy(renderer, window_texture, NULL, &drawable_rect);
+    SDL_RenderCopy(renderer, texture, NULL, &drawable_rect);
     SDL_RenderPresent(renderer);
 }
 
@@ -383,8 +383,8 @@ void update_viewport(void)
         new_width, new_height};
 
     SDL_Rect drawable_rect_in_screen = window_to_screen_rect(drawable_rect);
-    if (window_texture) {
-        SDL_DestroyTexture(window_texture);
+    if (texture) {
+        SDL_DestroyTexture(texture);
         SDL_FreeSurface(active_window_surface);
         SDL_FreeSurface(previous_window_surface);
         SDL_FreeSurface(screen_surface);
@@ -393,7 +393,7 @@ void update_viewport(void)
     if (renderer) {
         SDL_RenderSetViewport(renderer, &viewport);
     }
-    window_texture = SDL_CreateTexture(renderer, pixel_format->format, SDL_TEXTUREACCESS_STREAMING, drawable_rect_in_screen.w, drawable_rect_in_screen.h);
+    texture = SDL_CreateTexture(renderer, pixel_format->format, SDL_TEXTUREACCESS_STREAMING, drawable_rect_in_screen.w, drawable_rect_in_screen.h);
     active_window_surface = SDL_CreateRGBSurfaceWithFormat(0, drawable_rect_in_screen.w, drawable_rect_in_screen.h, 32, pixel_format->format);
     previous_window_surface = SDL_CreateRGBSurfaceWithFormat(0, drawable_rect_in_screen.w, drawable_rect_in_screen.h, 32, pixel_format->format);
     screen_surface = SDL_CreateRGBSurfaceWithFormat(0, 160, 144, 32, pixel_format->format);
