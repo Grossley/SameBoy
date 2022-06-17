@@ -340,7 +340,7 @@ struct scale compute_viewport_scale(void)
     int win_width, win_height;
     struct scale scale;
 
-    SDL_Rect drawable_rect = window_drawable_rect();
+    //SDL_Rect drawable_rect = window_drawable_rect();
     int logical_width, logical_height;
     SDL_GetWindowSize(window, &logical_width, &logical_height);
     factor = win_width / logical_width;
