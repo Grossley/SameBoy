@@ -379,7 +379,10 @@ void update_viewport(void)
     SDL_GL_GetDrawableSize(window, &win_width, &win_height);
     SDL_Rect drawable_rect = window_drawable_rect();
     struct scale scale = compute_viewport_scale();
-
+	
+    double x_factor = win_width / (double) GB_get_screen_width(&gb);
+    double y_factor = win_height / (double) GB_get_screen_height(&gb);
+	
     unsigned new_width = x_factor * GB_get_screen_width(&gb);
     unsigned new_height = y_factor * GB_get_screen_height(&gb);
 
