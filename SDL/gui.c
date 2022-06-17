@@ -337,6 +337,7 @@ SDL_Rect window_drawable_rect()
 
 struct scale compute_viewport_scale(void)
 {
+    int win_width, win_height;
     struct scale scale;
 
     SDL_Rect drawable_rect = window_drawable_rect();
