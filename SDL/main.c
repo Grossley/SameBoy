@@ -470,11 +470,6 @@ static void rgb_decode(uint32_t pixel, uint8_t *r, uint8_t *g, uint8_t *b)
     SDL_GetRGB(pixel, pixel_format, r, g, b);
 }
 
-static uint32_t gb_rgb_encode(uint8_t r, uint8_t g, uint8_t b)
-{
-    return SDL_MapRGB(pixel_format, r, g, b);
-}
-
 static uint32_t gb_rgb_encode(GB_gameboy_t *gb, uint8_t r, uint8_t g, uint8_t b)
 {
     return SDL_MapRGB(pixel_format, r, g, b);
