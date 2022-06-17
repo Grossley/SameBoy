@@ -338,6 +338,7 @@ SDL_Rect window_drawable_rect()
 struct scale compute_viewport_scale(void)
 {
     int win_width, win_height;
+    SDL_GL_GetDrawableSize(window, &win_width, &win_height);
     struct scale scale;
 
     //SDL_Rect drawable_rect = window_drawable_rect();
@@ -374,6 +375,8 @@ struct scale compute_viewport_scale(void)
 
 void update_viewport(void)
 {
+    int win_width, win_height;
+    SDL_GL_GetDrawableSize(window, &win_width, &win_height);
     SDL_Rect drawable_rect = window_drawable_rect();
     struct scale scale = compute_viewport_scale();
 
