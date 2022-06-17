@@ -465,11 +465,6 @@ static void rgb_decode(uint32_t pixel, uint8_t *r, uint8_t *g, uint8_t *b)
     SDL_GetRGB(pixel, pixel_format, r, g, b);
 }
 
-static WGB_rgb_encode_callback_t rgb_encode(GB_gameboy_t *gb, uint8_t r, uint8_t g, uint8_t b)
-{
-    return SDL_MapRGB(pixel_format, r, g, b);
-}
-
 static uint32_t rgb_encode(GB_gameboy_t *gb, uint8_t r, uint8_t g, uint8_t b)
 {
     return SDL_MapRGB(pixel_format, r, g, b);
@@ -780,8 +775,9 @@ restart:
     /* Configure WideGB */
     char wgb_save_path[path_length + 8];
     replace_extension(filename, path_length, wgb_save_path, ".widegb");
-    wgb = WGB_init_from_path(wgb_save_path, rgb_encode);
-        
+    //wgb = WGB_init_from_path(wgb_save_path, rgb_encode);
+    wide_gb wgb = { 0 };
+    
     screen_size_changed();
 
     /* Run emulation */
