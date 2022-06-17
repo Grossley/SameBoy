@@ -116,7 +116,7 @@ void render_surface_gl(SDL_Surface *surface, SDL_Surface *previous_surface)
 
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    render_bitmap_with_shader(&shader, pixels, previous_pixels, surface_rect.w, surface_rect.h, drawable_rect.x, drawable_rect.y, drawable_rect.w, drawable_rect.h, mode);
+    render_bitmap_with_shader(&shader, pixels, previous_pixels, surface_rect.w, surface_rect.h, drawable_rect.x, drawable_rect.y, drawable_rect.w, drawable_rect.h, configuration.blending_mode);
     SDL_GL_SwapWindow(window);
 }
 
