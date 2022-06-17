@@ -465,6 +465,11 @@ static void rgb_decode(uint32_t pixel, uint8_t *r, uint8_t *g, uint8_t *b)
     SDL_GetRGB(pixel, pixel_format, r, g, b);
 }
 
+static WGB_rgb_encode_callback_t rgb_encode(GB_gameboy_t *gb, uint8_t r, uint8_t g, uint8_t b)
+{
+    return SDL_MapRGB(pixel_format, r, g, b);
+}
+
 static uint32_t rgb_encode(GB_gameboy_t *gb, uint8_t r, uint8_t g, uint8_t b)
 {
     return SDL_MapRGB(pixel_format, r, g, b);
@@ -971,7 +976,7 @@ int main(int argc, char **argv)
     snprintf(prefs_path, sizeof(prefs_path) - 1, "%sprefs.bin", prefs_dir);
     SDL_free(prefs_dir);
     
-    FILE *prefs_file = fopen(prefs_path, "rb");
+    prefs_file = fopen(prefs_path, "rb");
     if (prefs_file) {
         fread(&configuration, 1, sizeof(configuration), prefs_file);
         fclose(prefs_file);
