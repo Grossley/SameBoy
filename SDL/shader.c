@@ -62,8 +62,11 @@ static GLuint create_program(const char *vsh, const char *fsh)
     return program;
 }
 
+extern bool uses_gl(void);
 bool init_shader_with_name(shader_t *shader, const char *name)
 {
+    if (!uses_gl()) return false;
+    
     GLint major = 0, minor = 0;
     glGetIntegerv(GL_MAJOR_VERSION, &major);
     glGetIntegerv(GL_MINOR_VERSION, &minor);
@@ -75,7 +78,7 @@ bool init_shader_with_name(shader_t *shader, const char *name)
     static char master_shader_code[0x801] = {0,};
     static char shader_code[0x10001] = {0,};
     static char final_shader_code[0x10801] = {0,};
-    static signed long filter_token_location = 0;
+    static ssize_t filter_token_location = 0;
     
     if (!master_shader_code[0]) {
         FILE *master_shader_f = fopen(resource_path("Shaders/MasterShader.fsh"), "r");
@@ -130,7 +133,7 @@ bool init_shader_with_name(shader_t *shader, const char *name)
     glBindTexture(GL_TEXTURE_2D, 0);
     shader->previous_texture_uniform = glGetUniformLocation(shader->program, "previous_image");
     
-    shader->mix_previous_uniform = glGetUniformLocation(shader->program, "mix_previous");
+    shader->blending_mode_uniform = glGetUniformLocation(shader->program, "frame_blending_mode");
     
     // Program
     
@@ -162,20 +165,23 @@ bool init_shader_with_name(shader_t *shader, const char *name)
     return true;
 }
 
-void render_bitmap_with_shader(shader_t *shader, void *bitmap, void *previous, unsigned source_w, unsigned source_h, unsigned x, unsigned y, unsigned w, unsigned h)
+void render_bitmap_with_shader(shader_t *shader, void *bitmap, void *previous,
+                               unsigned source_width, unsigned source_height,
+                               unsigned x, unsigned y, unsigned w, unsigned h,
+                               GB_frame_blending_mode_t blending_mode)
 {
     glUseProgram(shader->program);
     glUniform2f(shader->origin_uniform, x, y);
     glUniform2f(shader->resolution_uniform, w, h);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shader->texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, source_w, source_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, bitmap);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, source_width, source_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, bitmap);
     glUniform1i(shader->texture_uniform, 0);
-    glUniform1i(shader->mix_previous_uniform, previous != NULL);
+    glUniform1i(shader->blending_mode_uniform, previous? blending_mode : GB_FRAME_BLENDING_MODE_DISABLED);
     if (previous) {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, shader->previous_texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, source_w, source_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, previous);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, source_width, source_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, previous);
         glUniform1i(shader->previous_texture_uniform, 1);
     }
     glBindFragDataLocation(shader->program, 0, "frag_color");
@@ -184,6 +190,7 @@ void render_bitmap_with_shader(shader_t *shader, void *bitmap, void *previous, u
 
 void free_shader(shader_t *shader)
 {
+    if (!uses_gl()) return;
     GLint major = 0, minor = 0;
     glGetIntegerv(GL_MAJOR_VERSION, &major);
     glGetIntegerv(GL_MINOR_VERSION, &minor);

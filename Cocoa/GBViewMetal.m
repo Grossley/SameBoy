@@ -1,4 +1,7 @@
+#import <CoreImage/CoreImage.h>
 #import "GBViewMetal.h"
+#pragma clang diagnostic ignored "-Wpartial-availability"
+
 
 static const vector_float2 rect[] =
 {
@@ -15,7 +18,7 @@ static const vector_float2 rect[] =
     id<MTLBuffer> vertices;
     id<MTLRenderPipelineState> pipeline_state;
     id<MTLCommandQueue> command_queue;
-    id<MTLBuffer> mix_previous_buffer;
+    id<MTLBuffer> frame_blending_mode_buffer;
     id<MTLBuffer> output_resolution_buffer;
     vector_float2 output_resolution;
 }
@@ -49,16 +52,18 @@ static const vector_float2 rect[] =
     MTKView *view = [[MTKView alloc] initWithFrame:self.frame device:(device = MTLCreateSystemDefaultDevice())];
     view.delegate = self;
     self.internalView = view;
-    view.paused = YES;
+    view.paused = true;
+    view.enableSetNeedsDisplay = true;
+    view.framebufferOnly = false;
     
     vertices = [device newBufferWithBytes:rect
                                    length:sizeof(rect)
                                   options:MTLResourceStorageModeShared];
     
-    static const bool default_mix_value = false;
-    mix_previous_buffer = [device newBufferWithBytes:&default_mix_value
-                                              length:sizeof(default_mix_value)
-                                             options:MTLResourceStorageModeShared];
+    static const GB_frame_blending_mode_t default_blending_mode = GB_FRAME_BLENDING_MODE_DISABLED;
+    frame_blending_mode_buffer = [device newBufferWithBytes:&default_blending_mode
+                                          length:sizeof(default_blending_mode)
+                                         options:MTLResourceStorageModeShared];
     
     output_resolution_buffer = [device newBufferWithBytes:&output_resolution
                                                    length:sizeof(output_resolution)
@@ -88,7 +93,7 @@ static const vector_float2 rect[] =
                                                              withString:scaler_source];
 
     MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
-    options.fastMathEnabled = YES;
+    options.fastMathEnabled = true;
     id<MTLLibrary> library = [device newLibraryWithSource:shader_source
                                                    options:options
                                                      error:&error];
@@ -119,23 +124,24 @@ static const vector_float2 rect[] =
     command_queue = [device newCommandQueue];
 }
 
-- (void)mtkView:(nonnull MTKView *)view drawableSizeWillChange:(CGSize)size
+- (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size
 {
     dispatch_async(dispatch_get_main_queue(), ^{
         [(MTKView *)self.internalView draw];
     });
 }
 
-- (void)drawInMTKView:(nonnull MTKView *)view
+- (void)drawInMTKView:(MTKView *)view
 {
     if (!(view.window.occlusionState & NSWindowOcclusionStateVisible)) return;
 
     CGContextRef buffer = self.currentBuffer;
     NSSize bufferDimensions = NSMakeSize(CGBitmapContextGetWidth(buffer), CGBitmapContextGetHeight(buffer));
     
-    if (texture.width  != bufferDimensions.width ||
-        texture.height != bufferDimensions.height) {
-        [self allocateTexturesForSize:bufferDimensions];
+    if (!self.gb) return;
+    if (texture.width  != GB_get_screen_width(self.gb) ||
+        texture.height != GB_get_screen_height(self.gb)) {
+        [self allocateTextures];
     }
     
     MTLRegion region = {
@@ -147,7 +153,7 @@ static const vector_float2 rect[] =
                mipmapLevel:0
                  withBytes:CGBitmapContextGetData(buffer)
                bytesPerRow:texture.width * 4];
-    if ([self shouldBlendFrameWithPrevious]) {
+    if ([self frameBlendingMode]) {
         [previous_texture replaceRegion:region
                             mipmapLevel:0
                               withBytes:CGBitmapContextGetData(self.previousBuffer)
@@ -163,7 +169,7 @@ static const vector_float2 rect[] =
         double scale = self.window.backingScaleFactor;
         output_resolution = (vector_float2){viewport.size.width * scale, viewport.size.height * scale};
 
-        *(bool *)[mix_previous_buffer contents] = [self shouldBlendFrameWithPrevious];
+        *(GB_frame_blending_mode_t *)[frame_blending_mode_buffer contents] = [self frameBlendingMode];
         *(vector_float2 *)[output_resolution_buffer contents] = output_resolution;
 
         id<MTLRenderCommandEncoder> render_encoder =
@@ -182,7 +188,7 @@ static const vector_float2 rect[] =
                                  offset:0
                                 atIndex:0];
         
-        [render_encoder setFragmentBuffer:mix_previous_buffer
+        [render_encoder setFragmentBuffer:frame_blending_mode_buffer
                                    offset:0
                                   atIndex:0];
         
@@ -213,8 +219,23 @@ static const vector_float2 rect[] =
 {
     [super flip];
     dispatch_async(dispatch_get_main_queue(), ^{
-        [(MTKView *)self.internalView draw];
+        [(MTKView *)self.internalView setNeedsDisplay:true];
     });
+}
+
+- (NSImage *)renderToImage
+{
+    CIImage *ciImage = [CIImage imageWithMTLTexture:[[(MTKView *)self.internalView currentDrawable] texture]
+                                            options:@{
+                                                kCIImageColorSpace: (__bridge_transfer id)CGColorSpaceCreateDeviceRGB()
+                                            }];
+    ciImage = [ciImage imageByApplyingTransform:CGAffineTransformTranslate(CGAffineTransformMakeScale(1, -1),
+                                                                           0, ciImage.extent.size.height)];
+    CIContext *context = [CIContext context];
+    CGImageRef cgImage = [context createCGImage:ciImage fromRect:ciImage.extent];
+    NSImage *ret = [[NSImage alloc] initWithCGImage:cgImage size:self.internalView.bounds.size];
+    CGImageRelease(cgImage);
+    return ret;
 }
 
 @end

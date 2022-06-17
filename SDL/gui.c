@@ -1,4 +1,5 @@
-#include <SDL2/SDL.h>
+#include <OpenDialog/open_dialog.h>
+#include <SDL.h>
 #include <Misc/wide_gb.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -23,6 +24,7 @@ SDL_Surface *border_surface = NULL;
 SDL_PixelFormat *pixel_format = NULL;
 enum pending_command pending_command;
 unsigned command_parameter;
+char *dropped_state_file = NULL;
 
 #ifdef __APPLE__
 #define MODIFIER_NAME " " CMD_STRING
@@ -34,6 +36,7 @@ shader_t shader;
 SDL_Rect viewport;
 wide_gb wgb;
 SDL_Surface *wgb_surfaces[WIDE_GB_MAX_TILES];
+static unsigned factor;
 
 struct scale {
     double x;
@@ -219,9 +222,37 @@ void render_texture(void *pixels, void *previous)
 
     // 5. Render
     if (renderer) {
-        render_surface_sdl(active_window_surface, previous ? previous_window_surface : NULL);
-    } else {
-        render_surface_gl(active_window_surface, previous ? previous_window_surface : NULL);
+        if (pixels) {
+            SDL_UpdateTexture(texture, NULL, pixels, GB_get_screen_width(&gb) * sizeof (uint32_t));
+        }
+        SDL_RenderClear(renderer);
+        SDL_RenderCopy(renderer, texture, NULL, NULL);
+        SDL_RenderPresent(renderer);
+    }
+    else {
+        static void *_pixels = NULL;
+        if (pixels) {
+            _pixels = pixels;
+        }
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        GB_frame_blending_mode_t mode = configuration.blending_mode;
+        if (!previous) {
+            mode = GB_FRAME_BLENDING_MODE_DISABLED;
+        }
+        else if (mode == GB_FRAME_BLENDING_MODE_ACCURATE) {
+            if (GB_is_sgb(&gb)) {
+                mode = GB_FRAME_BLENDING_MODE_SIMPLE;
+            }
+            else {
+                mode = GB_is_odd_frame(&gb)? GB_FRAME_BLENDING_MODE_ACCURATE_ODD : GB_FRAME_BLENDING_MODE_ACCURATE_EVEN;
+            }
+        }
+        render_bitmap_with_shader(&shader, _pixels, previous,
+                                  GB_get_screen_width(&gb), GB_get_screen_height(&gb),
+                                  rect.x, rect.y, rect.w, rect.h,
+                                  mode);
+        SDL_GL_SwapWindow(window);
     }
 
     // Swap surfaces
@@ -268,18 +299,22 @@ configuration_t configuration =
     .color_correction_mode = GB_COLOR_CORRECTION_EMULATE_HARDWARE,
     .highpass_mode = GB_HIGHPASS_ACCURATE,
     .scaling_mode = GB_SDL_SCALING_INTEGER_FACTOR,
-    .blend_frames = true,
+    .blending_mode = GB_FRAME_BLENDING_MODE_ACCURATE,
     .rewind_length = 60 * 2,
-    .model = MODEL_CGB
+    .model = MODEL_CGB,
+    .volume = 100,
+    .rumble_mode = GB_RUMBLE_ALL_GAMES,
+    .default_scale = 2,
+    .color_temperature = 10,
 };
 
 
-static const char *help[] ={
-"Drop a GB or GBC ROM\n"
-"file to play.\n"
+static const char *help[] = {
+"Drop a ROM to play.\n"
 "\n"
 "Keyboard Shortcuts:\n"
 " Open Menu:        Escape\n"
+" Open ROM:          " MODIFIER_NAME "+O\n"
 " Reset:             " MODIFIER_NAME "+R\n"
 " Pause:             " MODIFIER_NAME "+P\n"
 " Save state:    " MODIFIER_NAME "+(0-9)\n"
@@ -305,12 +340,16 @@ struct scale compute_viewport_scale(void)
     struct scale scale;
 
     SDL_Rect drawable_rect = window_drawable_rect();
-    scale.x = drawable_rect.w / 160.0;
-    scale.y = drawable_rect.h / 144.0;
-
+    int logical_width, logical_height;
+    SDL_GetWindowSize(window, &logical_width, &logical_height);
+    factor = win_width / logical_width;
+    
+    double x_factor = win_width / (double) GB_get_screen_width(&gb);
+    double y_factor = win_height / (double) GB_get_screen_height(&gb);
+    
     if (configuration.scaling_mode == GB_SDL_SCALING_INTEGER_FACTOR) {
-        scale.x = (int)(scale.x);
-        scale.y = (int)(scale.y);
+        x_factor = (unsigned)(x_factor);
+        y_factor = (unsigned)(y_factor);
     }
     else if (configuration.scaling_mode == GB_SDL_SCALING_WIDE_SCREEN) {
         scale.x = floor(scale.x * 0.8);
@@ -337,15 +376,11 @@ void update_viewport(void)
     SDL_Rect drawable_rect = window_drawable_rect();
     struct scale scale = compute_viewport_scale();
 
-    int new_width = 160 * scale.x;
-    int new_height = 144 * scale.y;
+    unsigned new_width = x_factor * GB_get_screen_width(&gb);
+    unsigned new_height = y_factor * GB_get_screen_height(&gb);
 
-    viewport = (SDL_Rect) {
-        .x = (drawable_rect.w - new_width) / 2,
-        .y = (drawable_rect.h - new_height) / 2,
-        .w = new_width,
-        .h = new_height
-    };
+    viewport = (SDL_Rect){(win_width  - new_width) / 2, (win_height - new_height) /2,
+        new_width, new_height};
 
     SDL_Rect drawable_rect_in_screen = window_to_screen_rect(drawable_rect);
     if (window_texture) {
@@ -354,6 +389,9 @@ void update_viewport(void)
         SDL_FreeSurface(previous_window_surface);
         SDL_FreeSurface(screen_surface);
         SDL_FreeSurface(border_surface);
+    }
+    if (renderer) {
+        SDL_RenderSetViewport(renderer, &rect);
     }
     window_texture = SDL_CreateTexture(renderer, pixel_format->format, SDL_TEXTUREACCESS_STREAMING, drawable_rect_in_screen.w, drawable_rect_in_screen.h);
     active_window_surface = SDL_CreateRGBSurfaceWithFormat(0, drawable_rect_in_screen.w, drawable_rect_in_screen.h, 32, pixel_format->format);
@@ -375,8 +413,12 @@ void update_viewport(void)
     }
 }
 
-/* Does NOT check for bounds! */
-static void draw_char(uint32_t *buffer, unsigned char ch, uint32_t color)
+static void rescale_window(void)
+{
+    SDL_SetWindowSize(window, GB_get_screen_width(&gb) * configuration.default_scale, GB_get_screen_height(&gb) * configuration.default_scale);
+}
+
+static void draw_char(uint32_t *buffer, unsigned width, unsigned height, unsigned char ch, uint32_t color, uint32_t *mask_top, uint32_t *mask_bottom)
 {
     if (ch < ' ' || ch > font_max) {
         ch = '?';
@@ -386,18 +428,23 @@ static void draw_char(uint32_t *buffer, unsigned char ch, uint32_t color)
     
     for (unsigned y = GLYPH_HEIGHT; y--;) {
         for (unsigned x = GLYPH_WIDTH; x--;) {
-            if (*(data++)) {
+            if (*(data++) && buffer >= mask_top && buffer < mask_bottom) {
                 (*buffer) = color;
             }
             buffer++;
         }
-        buffer += 160 - GLYPH_WIDTH;
+        buffer += width - GLYPH_WIDTH;
     }
 }
 
-static void draw_unbordered_text(uint32_t *buffer, unsigned x, unsigned y, const char *string, uint32_t color)
+static signed scroll = 0;
+static void draw_unbordered_text(uint32_t *buffer, unsigned width, unsigned height, unsigned x, signed y, const char *string, uint32_t color, bool is_osd)
 {
+    if (!is_osd) {
+        y -= scroll;
+    }
     unsigned orig_x = x;
+    unsigned y_offset = is_osd? 0 : (GB_get_screen_height(&gb) - 144) / 2;
     while (*string) {
         if (*string == '\n') {
             x = orig_x;
@@ -406,24 +453,42 @@ static void draw_unbordered_text(uint32_t *buffer, unsigned x, unsigned y, const
             continue;
         }
         
-        if (x > 160 - GLYPH_WIDTH || y == 0 || y > 144 - GLYPH_HEIGHT) {
+        if (x > width - GLYPH_WIDTH) {
             break;
         }
         
-        draw_char(&buffer[x + 160 * y], *string, color);
+        draw_char(&buffer[(signed)(x + width * y)], width, height, *string, color, &buffer[width * y_offset], &buffer[width * (is_osd? GB_get_screen_height(&gb) : y_offset + 144)]);
         x += GLYPH_WIDTH;
         string++;
     }
 }
 
-static void draw_text(uint32_t *buffer, unsigned x, unsigned y, const char *string, uint32_t color, uint32_t border)
+void draw_text(uint32_t *buffer, unsigned width, unsigned height, unsigned x, signed y, const char *string, uint32_t color, uint32_t border, bool is_osd)
 {
-    draw_unbordered_text(buffer, x - 1, y, string, border);
-    draw_unbordered_text(buffer, x + 1, y, string, border);
-    draw_unbordered_text(buffer, x, y - 1, string, border);
-    draw_unbordered_text(buffer, x, y + 1, string, border);
-    draw_unbordered_text(buffer, x, y, string, color);
+    draw_unbordered_text(buffer, width, height, x - 1, y, string, border, is_osd);
+    draw_unbordered_text(buffer, width, height, x + 1, y, string, border, is_osd);
+    draw_unbordered_text(buffer, width, height, x, y - 1, string, border, is_osd);
+    draw_unbordered_text(buffer, width, height, x, y + 1, string, border, is_osd);
+    draw_unbordered_text(buffer, width, height, x, y, string, color, is_osd);
 }
+
+const char *osd_text = NULL;
+unsigned osd_countdown = 0;
+unsigned osd_text_lines = 1;
+
+void show_osd_text(const char *text)
+{
+    osd_text_lines = 1;
+    osd_text = text;
+    osd_countdown = 30;
+    while (*text++) {
+        if (*text == '\n') {
+            osd_text_lines++;
+            osd_countdown += 30;
+        }
+    }
+}
+
 
 enum decoration {
     DECORATION_NONE,
@@ -431,17 +496,17 @@ enum decoration {
     DECORATION_ARROWS,
 };
 
-static void draw_text_centered(uint32_t *buffer, unsigned y, const char *string, uint32_t color, uint32_t border, enum decoration decoration)
+static void draw_text_centered(uint32_t *buffer, unsigned width, unsigned height, unsigned y, const char *string, uint32_t color, uint32_t border, enum decoration decoration)
 {
-    unsigned x = 160 / 2 - (unsigned) strlen(string) * GLYPH_WIDTH / 2;
-    draw_text(buffer, x, y, string, color, border);
+    unsigned x = width / 2 - (unsigned) strlen(string) * GLYPH_WIDTH / 2;
+    draw_text(buffer, width, height, x, y, string, color, border, false);
     switch (decoration) {
         case DECORATION_SELECTION:
-            draw_text(buffer, x - GLYPH_WIDTH, y, SELECTION_STRING, color, border);
+            draw_text(buffer, width, height, x - GLYPH_WIDTH, y, SELECTION_STRING, color, border, false);
             break;
         case DECORATION_ARROWS:
-            draw_text(buffer, x - GLYPH_WIDTH, y, LEFT_ARROW_STRING, color, border);
-            draw_text(buffer, 160 - x, y, RIGHT_ARROW_STRING, color, border);
+            draw_text(buffer, width, height, x - GLYPH_WIDTH, y, LEFT_ARROW_STRING, color, border, false);
+            draw_text(buffer, width, height, width - x, y, RIGHT_ARROW_STRING, color, border, false);
             break;
             
         case DECORATION_NONE:
@@ -457,6 +522,10 @@ struct menu_item {
 };
 static const struct menu_item *current_menu = NULL;
 static const struct menu_item *root_menu = NULL;
+static unsigned menu_height;
+static unsigned scrollbar_size;
+static bool mouse_scroling = false;
+
 static unsigned current_selection = 0;
 
 static enum {
@@ -484,17 +553,49 @@ static void item_help(unsigned index)
 
 static void enter_emulation_menu(unsigned index);
 static void enter_graphics_menu(unsigned index);
-static void enter_controls_menu(unsigned index);
+static void enter_keyboard_menu(unsigned index);
 static void enter_joypad_menu(unsigned index);
 static void enter_audio_menu(unsigned index);
+static void enter_controls_menu(unsigned index);
+static void toggle_audio_recording(unsigned index);
+
+extern void set_filename(const char *new_filename, typeof(free) *new_free_function);
+static void open_rom(unsigned index)
+{
+    char *filename = do_open_rom_dialog();
+    if (filename) {
+        set_filename(filename, free);
+        pending_command = GB_SDL_NEW_FILE_COMMAND;
+    }
+}
+
+static void recalculate_menu_height(void)
+{
+    menu_height = 24;
+    scrollbar_size = 0;
+    if (gui_state == SHOWING_MENU) {
+        for (const struct menu_item *item = current_menu; item->string; item++) {
+            menu_height += 12;
+            if (item->backwards_handler) {
+                menu_height += 12;
+            }
+        }
+    }
+    if (menu_height > 144) {
+        scrollbar_size = 144 * 140 / menu_height;
+    }
+}
+
+char audio_recording_menu_item[] = "Start Audio Recording";
 
 static const struct menu_item paused_menu[] = {
     {"Resume", NULL},
+    {"Open ROM", open_rom},
     {"Emulation Options", enter_emulation_menu},
     {"Graphic Options", enter_graphics_menu},
     {"Audio Options", enter_audio_menu},
-    {"Keyboard", enter_controls_menu},
-    {"Joypad", enter_joypad_menu},
+    {"Control Options", enter_controls_menu},
+    {audio_recording_menu_item, toggle_audio_recording},
     {"Help", item_help},
     {"Quit SameBoy", item_exit},
     {NULL,}
@@ -506,6 +607,8 @@ static void return_to_root_menu(unsigned index)
 {
     current_menu = root_menu;
     current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
 }
 
 static void cycle_model(unsigned index)
@@ -529,8 +632,33 @@ static void cycle_model_backwards(unsigned index)
 
 const char *current_model_string(unsigned index)
 {
-    return (const char *[]){"Game Boy", "Game Boy Color", "Game Boy Advance"}
+    return (const char *[]){"Game Boy", "Game Boy Color", "Game Boy Advance", "Super Game Boy", "Game Boy Pocket"}
         [configuration.model];
+}
+
+static void cycle_sgb_revision(unsigned index)
+{
+    
+    configuration.sgb_revision++;
+    if (configuration.sgb_revision == SGB_MAX) {
+        configuration.sgb_revision = 0;
+    }
+    pending_command = GB_SDL_RESET_COMMAND;
+}
+
+static void cycle_sgb_revision_backwards(unsigned index)
+{
+    if (configuration.sgb_revision == 0) {
+        configuration.sgb_revision = SGB_MAX;
+    }
+    configuration.sgb_revision--;
+    pending_command = GB_SDL_RESET_COMMAND;
+}
+
+const char *current_sgb_revision_string(unsigned index)
+{
+    return (const char *[]){"Super Game Boy NTSC", "Super Game Boy PAL", "Super Game Boy 2"}
+    [configuration.sgb_revision];
 }
 
 static const uint32_t rewind_lengths[] = {0, 10, 30, 60, 60 * 2, 60 * 5, 60 * 10};
@@ -579,9 +707,66 @@ const char *current_rewind_string(unsigned index)
     return "Custom";
 }
 
+const char *current_bootrom_string(unsigned index)
+{
+    if (!configuration.bootrom_path[0]) {
+        return "Built-in Boot ROMs";
+    }
+    size_t length = strlen(configuration.bootrom_path);
+    static char ret[24] = {0,};
+    if (length <= 23) {
+        strcpy(ret, configuration.bootrom_path);
+    }
+    else {
+        memcpy(ret, configuration.bootrom_path, 11);
+        memcpy(ret + 12, configuration.bootrom_path + length - 11, 11);
+    }
+    for (unsigned i = 0; i < 24; i++) {
+        if (ret[i] < 0) {
+            ret[i] = MOJIBAKE_STRING[0];
+        }
+    }
+    if (length > 23) {
+        ret[11] = ELLIPSIS_STRING[0];
+    }
+    return ret;
+}
+
+static void toggle_bootrom(unsigned index)
+{
+    if (configuration.bootrom_path[0]) {
+        configuration.bootrom_path[0] = 0;
+    }
+    else {
+        char *folder = do_open_folder_dialog();
+        if (!folder) return;
+        if (strlen(folder) < sizeof(configuration.bootrom_path) - 1) {
+            strcpy(configuration.bootrom_path, folder);
+        }
+        free(folder);
+    }
+}
+
+static void toggle_rtc_mode(unsigned index)
+{
+    configuration.rtc_mode = !configuration.rtc_mode;
+}
+
+const char *current_rtc_mode_string(unsigned index)
+{
+    switch (configuration.rtc_mode) {
+        case GB_RTC_MODE_SYNC_TO_HOST: return "Sync to System Clock";
+        case GB_RTC_MODE_ACCURATE: return "Accurate";
+    }
+    return "";
+}
+
 static const struct menu_item emulation_menu[] = {
     {"Emulated Model:", cycle_model, current_model_string, cycle_model_backwards},
+    {"SGB Revision:", cycle_sgb_revision, current_sgb_revision_string, cycle_sgb_revision_backwards},
+    {"Boot ROMs Folder:", toggle_bootrom, current_bootrom_string, toggle_bootrom},
     {"Rewind Length:", cycle_rewind, current_rewind_string, cycle_rewind_backwards},
+    {"Real Time Clock:", toggle_rtc_mode, current_rtc_mode_string, toggle_rtc_mode},
     {"Back", return_to_root_menu},
     {NULL,}
 };
@@ -590,6 +775,8 @@ static void enter_emulation_menu(unsigned index)
 {
     current_menu = emulation_menu;
     current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
 }
 
 const char *current_scaling_mode(unsigned index)
@@ -598,10 +785,37 @@ const char *current_scaling_mode(unsigned index)
         [configuration.scaling_mode];
 }
 
+const char *current_default_scale(unsigned index)
+{
+    return (const char *[]){"1x", "2x", "3x", "4x", "5x", "6x", "7x", "8x"}
+        [configuration.default_scale - 1];
+}
+
 const char *current_color_correction_mode(unsigned index)
 {
-    return (const char *[]){"Disabled", "Correct Color Curves", "Emulate Hardware", "Preserve Brightness"}
+    return (const char *[]){"Disabled", "Correct Color Curves", "Emulate Hardware", "Preserve Brightness", "Reduce Contrast", "Harsh Reality"}
         [configuration.color_correction_mode];
+}
+
+const char *current_color_temperature(unsigned index)
+{
+    static char ret[22];
+    strcpy(ret, SLIDER_STRING);
+    ret[configuration.color_temperature] = SELECTED_SLIDER_STRING[configuration.color_temperature];
+    return ret;
+}
+
+
+const char *current_palette(unsigned index)
+{
+    return (const char *[]){"Greyscale", "Lime (Game Boy)", "Olive (Pocket)", "Teal (Light)"}
+        [configuration.dmg_palette];
+}
+
+const char *current_border_mode(unsigned index)
+{
+    return (const char *[]){"SGB Only", "Never", "Always"}
+        [configuration.border_mode];
 }
 
 void cycle_scaling(unsigned index)
@@ -626,9 +840,35 @@ void cycle_scaling_backwards(unsigned index)
     render_texture(NULL, NULL);
 }
 
+void cycle_default_scale(unsigned index)
+{
+    if (configuration.default_scale == GB_SDL_DEFAULT_SCALE_MAX) {
+        configuration.default_scale = 1;
+    }
+    else {
+        configuration.default_scale++;
+    }
+
+    rescale_window();
+    update_viewport();
+}
+
+void cycle_default_scale_backwards(unsigned index)
+{
+    if (configuration.default_scale == 1) {
+        configuration.default_scale = GB_SDL_DEFAULT_SCALE_MAX;
+    }
+    else {
+        configuration.default_scale--;
+    }
+
+    rescale_window();
+    update_viewport();
+}
+
 static void cycle_color_correction(unsigned index)
 {
-    if (configuration.color_correction_mode == GB_COLOR_CORRECTION_PRESERVE_BRIGHTNESS) {
+    if (configuration.color_correction_mode == GB_COLOR_CORRECTION_LOW_CONTRAST) {
         configuration.color_correction_mode = GB_COLOR_CORRECTION_DISABLED;
     }
     else {
@@ -639,13 +879,68 @@ static void cycle_color_correction(unsigned index)
 static void cycle_color_correction_backwards(unsigned index)
 {
     if (configuration.color_correction_mode == GB_COLOR_CORRECTION_DISABLED) {
-        configuration.color_correction_mode = GB_COLOR_CORRECTION_PRESERVE_BRIGHTNESS;
+        configuration.color_correction_mode = GB_COLOR_CORRECTION_LOW_CONTRAST;
     }
     else {
         configuration.color_correction_mode--;
     }
 }
 
+static void decrease_color_temperature(unsigned index)
+{
+    if (configuration.color_temperature < 20) {
+        configuration.color_temperature++;
+    }
+}
+
+static void increase_color_temperature(unsigned index)
+{
+    if (configuration.color_temperature > 0) {
+        configuration.color_temperature--;
+    }
+}
+
+static void cycle_palette(unsigned index)
+{
+    if (configuration.dmg_palette == 3) {
+        configuration.dmg_palette = 0;
+    }
+    else {
+        configuration.dmg_palette++;
+    }
+}
+
+static void cycle_palette_backwards(unsigned index)
+{
+    if (configuration.dmg_palette == 0) {
+        configuration.dmg_palette = 3;
+    }
+    else {
+        configuration.dmg_palette--;
+    }
+}
+
+static void cycle_border_mode(unsigned index)
+{
+    if (configuration.border_mode == GB_BORDER_ALWAYS) {
+        configuration.border_mode = GB_BORDER_SGB;
+    }
+    else {
+        configuration.border_mode++;
+    }
+}
+
+static void cycle_border_mode_backwards(unsigned index)
+{
+    if (configuration.border_mode == GB_BORDER_SGB) {
+        configuration.border_mode = GB_BORDER_ALWAYS;
+    }
+    else {
+        configuration.border_mode--;
+    }
+}
+
+extern bool uses_gl(void);
 struct shader_name {
     const char *file_name;
     const char *display_name;
@@ -654,6 +949,7 @@ struct shader_name {
     {"NearestNeighbor", "Nearest Neighbor"},
     {"Bilinear", "Bilinear"},
     {"SmoothBilinear", "Smooth Bilinear"},
+    {"MonoLCD", "Monochrome LCD"},
     {"LCD", "LCD Display"},
     {"CRT", "CRT Display"},
     {"Scale2x", "Scale2x"},
@@ -668,6 +964,7 @@ struct shader_name {
 
 static void cycle_filter(unsigned index)
 {
+    if (!uses_gl()) return;
     unsigned i = 0;
     for (; i < sizeof(shaders) / sizeof(shaders[0]); i++) {
         if (strcmp(shaders[i].file_name, configuration.filter) == 0) {
@@ -690,6 +987,7 @@ static void cycle_filter(unsigned index)
 
 static void cycle_filter_backwards(unsigned index)
 {
+    if (!uses_gl()) return;
     unsigned i = 0;
     for (; i < sizeof(shaders) / sizeof(shaders[0]); i++) {
         if (strcmp(shaders[i].file_name, configuration.filter) == 0) {
@@ -709,8 +1007,9 @@ static void cycle_filter_backwards(unsigned index)
     }
 
 }
-const char *current_filter_name(unsigned index)
+static const char *current_filter_name(unsigned index)
 {
+    if (!uses_gl()) return "Requires OpenGL 3.2+";
     unsigned i = 0;
     for (; i < sizeof(shaders) / sizeof(shaders[0]); i++) {
         if (strcmp(shaders[i].file_name, configuration.filter) == 0) {
@@ -725,21 +1024,57 @@ const char *current_filter_name(unsigned index)
     return shaders[i].display_name;
 }
 
-static void toggle_blend_frames(unsigned index)
+static void cycle_blending_mode(unsigned index)
 {
-    configuration.blend_frames ^= true;
+        if (!uses_gl()) return;
+    if (configuration.blending_mode == GB_FRAME_BLENDING_MODE_ACCURATE) {
+        configuration.blending_mode = GB_FRAME_BLENDING_MODE_DISABLED;
+    }
+    else {
+        configuration.blending_mode++;
+    }
 }
 
-const char *blend_frames_string(unsigned index)
+static void cycle_blending_mode_backwards(unsigned index)
 {
-    return configuration.blend_frames? "Enabled" : "Disabled";
+    if (!uses_gl()) return;
+    if (configuration.blending_mode == GB_FRAME_BLENDING_MODE_DISABLED) {
+        configuration.blending_mode = GB_FRAME_BLENDING_MODE_ACCURATE;
+    }
+    else {
+        configuration.blending_mode--;
+    }
+}
+
+static const char *blending_mode_string(unsigned index)
+{
+    if (!uses_gl()) return "Requires OpenGL 3.2+";
+    return (const char *[]){"Disabled", "Simple", "Accurate"}
+    [configuration.blending_mode];
+}
+
+static void toggle_osd(unsigned index)
+{
+    osd_countdown = 0;
+    configuration.osd = !configuration.osd;
+}
+
+static const char *current_osd_mode(unsigned index)
+{
+    return configuration.osd? "Enabled" : "Disabled";
 }
 
 static const struct menu_item graphics_menu[] = {
     {"Scaling Mode:", cycle_scaling, current_scaling_mode, cycle_scaling_backwards},
+    {"Default Window Scale:", cycle_default_scale, current_default_scale, cycle_default_scale_backwards},
     {"Scaling Filter:", cycle_filter, current_filter_name, cycle_filter_backwards},
     {"Color Correction:", cycle_color_correction, current_color_correction_mode, cycle_color_correction_backwards},
-    {"Blend Frames:", toggle_blend_frames, blend_frames_string, toggle_blend_frames},
+    {"Ambient Light Temp.:", decrease_color_temperature, current_color_temperature, increase_color_temperature},
+    {"Frame Blending:", cycle_blending_mode, blending_mode_string, cycle_blending_mode_backwards},
+    {"Mono Palette:", cycle_palette, current_palette, cycle_palette_backwards},
+    {"Display Border:", cycle_border_mode, current_border_mode, cycle_border_mode_backwards},
+    {"On-Screen Display:", toggle_osd, current_osd_mode, toggle_osd},
+
     {"Back", return_to_root_menu},
     {NULL,}
 };
@@ -748,6 +1083,8 @@ static void enter_graphics_menu(unsigned index)
 {
     current_menu = graphics_menu;
     current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
 }
 
 const char *highpass_filter_string(unsigned index)
@@ -774,8 +1111,56 @@ void cycle_highpass_filter_backwards(unsigned index)
     }
 }
 
+const char *volume_string(unsigned index)
+{
+    static char ret[5];
+    sprintf(ret, "%d%%", configuration.volume);
+    return ret;
+}
+
+void increase_volume(unsigned index)
+{
+    configuration.volume += 5;
+    if (configuration.volume > 100) {
+        configuration.volume = 100;
+    }
+}
+
+void decrease_volume(unsigned index)
+{
+    configuration.volume -= 5;
+    if (configuration.volume > 100) {
+        configuration.volume = 0;
+    }
+}
+
+const char *interference_volume_string(unsigned index)
+{
+    static char ret[5];
+    sprintf(ret, "%d%%", configuration.interference_volume);
+    return ret;
+}
+
+void increase_interference_volume(unsigned index)
+{
+    configuration.interference_volume += 5;
+    if (configuration.interference_volume > 100) {
+        configuration.interference_volume = 100;
+    }
+}
+
+void decrease_interference_volume(unsigned index)
+{
+    configuration.interference_volume -= 5;
+    if (configuration.interference_volume > 100) {
+        configuration.interference_volume = 0;
+    }
+}
+
 static const struct menu_item audio_menu[] = {
     {"Highpass Filter:", cycle_highpass_filter, highpass_filter_string, cycle_highpass_filter_backwards},
+    {"Volume:", increase_volume, volume_string, decrease_volume},
+    {"Interference Volume:", increase_interference_volume, interference_volume_string, decrease_interference_volume},
     {"Back", return_to_root_menu},
     {NULL,}
 };
@@ -784,6 +1169,8 @@ static void enter_audio_menu(unsigned index)
 {
     current_menu = audio_menu;
     current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
 }
 
 static void modify_key(unsigned index)
@@ -791,10 +1178,9 @@ static void modify_key(unsigned index)
     gui_state = WAITING_FOR_KEY;
 }
 
-static void enter_controls_menu_2(unsigned index);
 static const char *key_name(unsigned index);
 
-static const struct menu_item controls_menu[] = {
+static const struct menu_item keyboard_menu[] = {
     {"Right:", modify_key, key_name,},
     {"Left:", modify_key, key_name,},
     {"Up:", modify_key, key_name,},
@@ -803,45 +1189,33 @@ static const struct menu_item controls_menu[] = {
     {"B:", modify_key, key_name,},
     {"Select:", modify_key, key_name,},
     {"Start:", modify_key, key_name,},
-    {"Next Page", enter_controls_menu_2},
-    {"Back", return_to_root_menu},
-    {NULL,}
-};
-
-static const struct menu_item controls_menu_2[] = {
     {"Turbo:", modify_key, key_name,},
     {"Rewind:", modify_key, key_name,},
     {"Slow-Motion:", modify_key, key_name,},
-    {"Back", return_to_root_menu},
+    {"Back", enter_controls_menu},
     {NULL,}
 };
 
 static const char *key_name(unsigned index)
 {
-    if (current_menu == controls_menu_2) {
-        if (index == 0) {
-            return SDL_GetScancodeName(configuration.keys[8]);
-        }
-        return SDL_GetScancodeName(configuration.keys_2[index - 1]);
+    if (index > 8) {
+        return SDL_GetScancodeName(configuration.keys_2[index - 9]);
     }
     return SDL_GetScancodeName(configuration.keys[index]);
 }
 
-static void enter_controls_menu(unsigned index)
+static void enter_keyboard_menu(unsigned index)
 {
-    current_menu = controls_menu;
+    current_menu = keyboard_menu;
     current_selection = 0;
-}
-
-static void enter_controls_menu_2(unsigned index)
-{
-    current_menu = controls_menu_2;
-    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
 }
 
 static unsigned joypad_index = 0;
 static SDL_Joystick *joystick = NULL;
 static SDL_GameController *controller = NULL;
+SDL_Haptic *haptic = NULL;
 
 const char *current_joypad_name(unsigned index)
 {
@@ -853,7 +1227,7 @@ const char *current_joypad_name(unsigned index)
     // SDL returns a name with repeated and trailing spaces
     while (*orig_name && i < sizeof(name) - 2) {
         if (orig_name[0] != ' ' || orig_name[1] != ' ') {
-            name[i++] = *orig_name;
+            name[i++] = *orig_name > 0? *orig_name : MOJIBAKE_STRING[0];
         }
         orig_name++;
     }
@@ -871,6 +1245,12 @@ static void cycle_joypads(unsigned index)
     if (joypad_index >= SDL_NumJoysticks()) {
         joypad_index = 0;
     }
+    
+    if (haptic) {
+        SDL_HapticClose(haptic);
+        haptic = NULL;
+    }
+    
     if (controller) {
         SDL_GameControllerClose(controller);
         controller = NULL;
@@ -879,20 +1259,28 @@ static void cycle_joypads(unsigned index)
         SDL_JoystickClose(joystick);
         joystick = NULL;
     }
-    if ((controller = SDL_GameControllerOpen(joypad_index))){
+    if ((controller = SDL_GameControllerOpen(joypad_index))) {
         joystick = SDL_GameControllerGetJoystick(controller);
     }
     else {
         joystick = SDL_JoystickOpen(joypad_index);
     }
-}
+    if (joystick) {
+        haptic = SDL_HapticOpenFromJoystick(joystick);
+    }}
 
 static void cycle_joypads_backwards(unsigned index)
 {
-    joypad_index++;
+    joypad_index--;
     if (joypad_index >= SDL_NumJoysticks()) {
         joypad_index = SDL_NumJoysticks() - 1;
     }
+    
+    if (haptic) {
+        SDL_HapticClose(haptic);
+        haptic = NULL;
+    }
+    
     if (controller) {
         SDL_GameControllerClose(controller);
         controller = NULL;
@@ -901,13 +1289,15 @@ static void cycle_joypads_backwards(unsigned index)
         SDL_JoystickClose(joystick);
         joystick = NULL;
     }
-    if ((controller = SDL_GameControllerOpen(joypad_index))){
+    if ((controller = SDL_GameControllerOpen(joypad_index))) {
         joystick = SDL_GameControllerGetJoystick(controller);
     }
     else {
         joystick = SDL_JoystickOpen(joypad_index);
     }
-}
+    if (joystick) {
+        haptic = SDL_HapticOpenFromJoystick(joystick);
+    }}
 
 static void detect_joypad_layout(unsigned index)
 {
@@ -916,10 +1306,37 @@ static void detect_joypad_layout(unsigned index)
     joypad_axis_temp = -1;
 }
 
+static void cycle_rumble_mode(unsigned index)
+{
+    if (configuration.rumble_mode == GB_RUMBLE_ALL_GAMES) {
+        configuration.rumble_mode = GB_RUMBLE_DISABLED;
+    }
+    else {
+        configuration.rumble_mode++;
+    }
+}
+
+static void cycle_rumble_mode_backwards(unsigned index)
+{
+    if (configuration.rumble_mode == GB_RUMBLE_DISABLED) {
+        configuration.rumble_mode = GB_RUMBLE_ALL_GAMES;
+    }
+    else {
+        configuration.rumble_mode--;
+    }
+}
+
+const char *current_rumble_mode(unsigned index)
+{
+    return (const char *[]){"Disabled", "Rumble Game Paks Only", "All Games"}
+    [configuration.rumble_mode];
+}
+
 static const struct menu_item joypad_menu[] = {
     {"Joypad:", cycle_joypads, current_joypad_name, cycle_joypads_backwards},
     {"Configure layout", detect_joypad_layout},
-    {"Back", return_to_root_menu},
+    {"Rumble Mode:", cycle_rumble_mode, current_rumble_mode, cycle_rumble_mode_backwards},
+    {"Back", enter_controls_menu},
     {NULL,}
 };
 
@@ -927,6 +1344,8 @@ static void enter_joypad_menu(unsigned index)
 {
     current_menu = joypad_menu;
     current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
 }
 
 joypad_button_t get_joypad_button(uint8_t physical_button)
@@ -964,24 +1383,139 @@ void connect_joypad(void)
         }
     }
     else if (!joystick && SDL_NumJoysticks()) {
-        if ((controller = SDL_GameControllerOpen(0))){
+        if ((controller = SDL_GameControllerOpen(0))) {
             joystick = SDL_GameControllerGetJoystick(controller);
         }
         else {
             joystick = SDL_JoystickOpen(0);
         }
     }
+    if (joystick) {
+        haptic = SDL_HapticOpenFromJoystick(joystick);
+    }
 }
 
-extern void set_filename(const char *new_filename, bool new_should_free);
+static void toggle_mouse_control(unsigned index)
+{
+    configuration.allow_mouse_controls = !configuration.allow_mouse_controls;
+}
+
+const char *mouse_control_string(unsigned index)
+{
+    return configuration.allow_mouse_controls? "Allow mouse control" : "Disallow mouse control";
+}
+
+static const struct menu_item controls_menu[] = {
+    {"Keyboard Options", enter_keyboard_menu},
+    {"Joypad Options", enter_joypad_menu},
+    {"Motion-controlled games:", toggle_mouse_control, mouse_control_string, toggle_mouse_control},
+    {"Back", return_to_root_menu},
+    {NULL,}
+};
+
+static void enter_controls_menu(unsigned index)
+{
+    current_menu = controls_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+static void toggle_audio_recording(unsigned index)
+{
+    if (!GB_is_inited(&gb)) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Cannot start audio recording, open a ROM file first.", window);
+        return;
+    }
+    static bool is_recording = false;
+    if (is_recording) {
+        is_recording = false;
+        show_osd_text("Audio recording ended");
+        int error = GB_stop_audio_recording(&gb);
+        if (error) {
+            char *message = NULL;
+            asprintf(&message, "Could not finalize recording: %s", strerror(error));
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", message, window);
+            free(message);
+        }
+        static const char item_string[] = "Start Audio Recording";
+        memcpy(audio_recording_menu_item, item_string, sizeof(item_string));
+        return;
+    }
+    char *filename = do_save_recording_dialog(GB_get_sample_rate(&gb));
+    
+    /* Drop events as it SDL seems to catch several in-dialog events */
+    SDL_Event event;
+    while (SDL_PollEvent(&event));
+    
+    if (filename) {
+        GB_audio_format_t format = GB_AUDIO_FORMAT_RAW;
+        size_t length = strlen(filename);
+        if (length >= 5) {
+            if (strcasecmp(".aiff", filename + length - 5) == 0) {
+                format = GB_AUDIO_FORMAT_AIFF;
+            }
+            else if (strcasecmp(".aifc", filename + length - 5) == 0) {
+                format = GB_AUDIO_FORMAT_AIFF;
+            }
+            else if (length >= 4) {
+                if (strcasecmp(".aif", filename + length - 4) == 0) {
+                    format = GB_AUDIO_FORMAT_AIFF;
+                }
+                else if (strcasecmp(".wav", filename + length - 4) == 0) {
+                    format = GB_AUDIO_FORMAT_WAV;
+                }
+            }
+        }
+        
+        int error = GB_start_audio_recording(&gb, filename, format);
+        free(filename);
+        if (error) {
+            char *message = NULL;
+            asprintf(&message, "Could not finalize recording: %s", strerror(error));
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", message, window);
+            free(message);
+            return;
+        }
+        
+        is_recording = true;
+        static const char item_string[] = "Stop Audio Recording";
+        memcpy(audio_recording_menu_item, item_string, sizeof(item_string));
+        show_osd_text("Audio recording started");
+    }
+}
+
+void convert_mouse_coordinates(signed *x, signed *y)
+{
+    signed width = GB_get_screen_width(&gb);
+    signed height = GB_get_screen_height(&gb);
+    signed x_offset = (width - 160) / 2;
+    signed y_offset = (height - 144) / 2;
+
+    *x = (signed)(*x - rect.x / factor) * width / (signed)(rect.w / factor) - x_offset;
+    *y = (signed)(*y - rect.y / factor) * height / (signed)(rect.h / factor) - y_offset;
+
+    if (strcmp("CRT", configuration.filter) == 0) {
+        *y = *y * 8 / 7;
+        *y -= 144 / 16;
+    }
+}
+
 void run_gui(bool is_running)
 {
+    SDL_ShowCursor(SDL_ENABLE);
     connect_joypad();
     
     /* Draw the background screen */
     static SDL_Surface *converted_background = NULL;
     if (!converted_background) {
         SDL_Surface *background = SDL_LoadBMP(resource_path("background.bmp"));
+        
+        /* Create a blank background if background.bmp could not be loaded */
+        if (!background) {
+            background = SDL_CreateRGBSurface(0, 160, 144, 8, 0, 0, 0, 0);
+        }
+        
         SDL_SetPaletteColors(background->format->palette, gui_palette, 0, 4);
         converted_background = SDL_ConvertSurface(background, pixel_format, 0);
         SDL_LockSurface(converted_background);
@@ -992,16 +1526,82 @@ void run_gui(bool is_running)
         }
     }
 
-    uint32_t pixels[160 * 144];
+    unsigned width = GB_get_screen_width(&gb);
+    unsigned height = GB_get_screen_height(&gb);
+    unsigned x_offset = (width - 160) / 2;
+    unsigned y_offset = (height - 144) / 2;
+    uint32_t pixels[width * height];
+    
+    if (width != 160 || height != 144) {
+        for (unsigned i = 0; i < width * height; i++) {
+            pixels[i] = gui_palette_native[0];
+        }
+    }
+    
     SDL_Event event = {0,};
     gui_state = is_running? SHOWING_MENU : SHOWING_DROP_MESSAGE;
     bool should_render = true;
     current_menu = root_menu = is_running? paused_menu : nonpaused_menu;
+    recalculate_menu_height();
     current_selection = 0;
-    do {
-        /* Convert Joypad events (We only generate down events) */
+    scroll = 0;
+    while (true) {
+        SDL_WaitEvent(&event);
+        /* Convert Joypad and mouse events (We only generate down events) */
         if (gui_state != WAITING_FOR_KEY && gui_state != WAITING_FOR_JBUTTON) {
             switch (event.type) {
+                case SDL_WINDOWEVENT:
+                    should_render = true;
+                    break;
+                case SDL_MOUSEBUTTONDOWN:
+                    if (gui_state == SHOWING_HELP) {
+                        event.type = SDL_KEYDOWN;
+                        event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+                    }
+                    else if (gui_state == SHOWING_DROP_MESSAGE) {
+                        event.type = SDL_KEYDOWN;
+                        event.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
+                    }
+                    else if (gui_state == SHOWING_MENU) {
+                        signed x = event.button.x;
+                        signed y = event.button.y;
+                        convert_mouse_coordinates(&x, &y);
+                        y += scroll;
+                        
+                        if (x < 0 || x >= 160 || y < 24) {
+                            continue;
+                        }
+                        
+                        unsigned item_y = 24;
+                        unsigned index = 0;
+                        for (const struct menu_item *item = current_menu; item->string; item++, index++) {
+                            if (!item->backwards_handler) {
+                                if (y >= item_y && y < item_y + 12) {
+                                    break;
+                                }
+                                item_y += 12;
+                            }
+                            else {
+                                if (y >= item_y && y < item_y + 24) {
+                                    break;
+                                }
+                                item_y += 24;
+                            }
+                        }
+                        
+                        if (!current_menu[index].string) continue;
+                        
+                        current_selection = index;
+                        event.type = SDL_KEYDOWN;
+                        if (current_menu[index].backwards_handler) {
+                            event.key.keysym.scancode = x < 80? SDL_SCANCODE_LEFT : SDL_SCANCODE_RIGHT;
+                        }
+                        else {
+                            event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+                        }
+
+                    }
+                    break;
                 case SDL_JOYBUTTONDOWN:
                     event.type = SDL_KEYDOWN;
                     joypad_button_t button = get_joypad_button(event.jbutton.button);
@@ -1032,6 +1632,7 @@ void run_gui(bool is_running)
                             event.key.keysym.scancode = scancode;
                         }
                     }
+                    break;
                }
                     
                 case SDL_JOYAXISMOTION: {
@@ -1090,9 +1691,21 @@ void run_gui(bool is_running)
                 break;
             }
             case SDL_DROPFILE: {
-                set_filename(event.drop.file, true);
-                pending_command = GB_SDL_NEW_FILE_COMMAND;
-                return;
+                if (GB_is_save_state(event.drop.file)) {
+                    if (GB_is_inited(&gb)) {
+                        dropped_state_file = event.drop.file;
+                        pending_command = GB_SDL_LOAD_STATE_FROM_FILE_COMMAND;
+                    }
+                    else {
+                        SDL_free(event.drop.file);
+                    }
+                    break;
+                }
+                else {
+                    set_filename(event.drop.file, SDL_free);
+                    pending_command = GB_SDL_NEW_FILE_COMMAND;
+                    return;
+                }
             }
             case SDL_JOYBUTTONDOWN:
             {
@@ -1126,9 +1739,55 @@ void run_gui(bool is_running)
                 }
                 break;
             }
+                
+            case SDL_MOUSEWHEEL: {
+                if (menu_height > 144) {
+                    scroll -= event.wheel.y;
+                    if (scroll < 0) {
+                        scroll = 0;
+                    }
+                    if (scroll >= menu_height - 144) {
+                        scroll = menu_height - 144;
+                    }
+
+                    mouse_scroling = true;
+                    should_render = true;
+                }
+                break;
+            }
+                
 
             case SDL_KEYDOWN:
-                if (event.key.keysym.scancode == SDL_SCANCODE_RETURN && gui_state == WAITING_FOR_JBUTTON) {
+                if (gui_state == WAITING_FOR_KEY) {
+                    if (current_selection > 8) {
+                        configuration.keys_2[current_selection - 9] = event.key.keysym.scancode;
+                    }
+                    else {
+                        configuration.keys[current_selection] = event.key.keysym.scancode;
+                    }
+                    gui_state = SHOWING_MENU;
+                    should_render = true;
+                }
+                else if (event_hotkey_code(&event) == SDL_SCANCODE_F && event.key.keysym.mod & MODIFIER) {
+                    if ((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) == false) {
+                        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    }
+                    else {
+                        SDL_SetWindowFullscreen(window, 0);
+                    }
+                    update_viewport();
+                }
+                else if (event_hotkey_code(&event) == SDL_SCANCODE_O) {
+                    if (event.key.keysym.mod & MODIFIER) {
+                        char *filename = do_open_rom_dialog();
+                        if (filename) {
+                            set_filename(filename, free);
+                            pending_command = GB_SDL_NEW_FILE_COMMAND;
+                            return;
+                        }
+                    }
+                }
+                else if (event.key.keysym.scancode == SDL_SCANCODE_RETURN && gui_state == WAITING_FOR_JBUTTON) {
                     should_render = true;
                     if (joypad_configuration_progress != JOYPAD_BUTTONS_MAX) {
                         configuration.joypad_configuration[joypad_configuration_progress] = -1;
@@ -1144,7 +1803,16 @@ void run_gui(bool is_running)
                     }
                 }
                 else if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
-                    if (is_running) {
+                    if (gui_state == SHOWING_MENU && current_menu != root_menu) {
+                        for (const struct menu_item *item = current_menu; item->string; item++) {
+                            if (strcmp(item->string, "Back") == 0) {
+                                item->handler(0);
+                                break;
+                            }
+                        }
+                        should_render = true;
+                    }
+                    else if (is_running) {
                         return;
                     }
                     else {
@@ -1155,17 +1823,22 @@ void run_gui(bool is_running)
                             gui_state = SHOWING_DROP_MESSAGE;
                         }
                         current_selection = 0;
+                        mouse_scroling = false;
+                        scroll = 0;
                         current_menu = root_menu;
+                        recalculate_menu_height();
                         should_render = true;
                     }
                 }
                 else if (gui_state == SHOWING_MENU) {
                     if (event.key.keysym.scancode == SDL_SCANCODE_DOWN && current_menu[current_selection + 1].string) {
                         current_selection++;
+                        mouse_scroling = false;
                         should_render = true;
                     }
                     else if (event.key.keysym.scancode == SDL_SCANCODE_UP && current_selection) {
                         current_selection--;
+                        mouse_scroling = false;
                         should_render = true;
                     }
                     else if (event.key.keysym.scancode == SDL_SCANCODE_RETURN  && !current_menu[current_selection].backwards_handler) {
@@ -1202,69 +1875,106 @@ void run_gui(bool is_running)
                     }
                     should_render = true;
                 }
-                else if (gui_state == WAITING_FOR_KEY) {
-                    if (current_menu == controls_menu_2) {
-                        if (current_selection == 0) {
-                            configuration.keys[8] = event.key.keysym.scancode;
-                        }
-                        else {
-                            configuration.keys_2[current_selection - 1] = event.key.keysym.scancode;
-                        }
-                    }
-                    else {
-                        configuration.keys[current_selection] = event.key.keysym.scancode;
-                    }
-                    gui_state = SHOWING_MENU;
-                    should_render = true;
-                }
                 break;
         }
         
         if (should_render) {
             should_render = false;
-            memcpy(pixels, converted_background->pixels, sizeof(pixels));
+            rerender:
+            if (width == 160 && height == 144) {
+                memcpy(pixels, converted_background->pixels, sizeof(pixels));
+            }
+            else {
+                for (unsigned y = 0; y < 144; y++) {
+                    memcpy(pixels + x_offset + width * (y + y_offset), ((uint32_t *)converted_background->pixels) + 160 * y, 160 * 4);
+                }
+            }
             
             switch (gui_state) {
                 case SHOWING_DROP_MESSAGE:
-                    draw_text_centered(pixels, 8, "Press ESC for menu", gui_palette_native[3], gui_palette_native[0], false);
-                    draw_text_centered(pixels, 116, "Drop a GB or GBC", gui_palette_native[3], gui_palette_native[0], false);
-                    draw_text_centered(pixels, 128, "file to play", gui_palette_native[3], gui_palette_native[0], false);
+                    draw_text_centered(pixels, width, height, 8 + y_offset, "Press ESC for menu", gui_palette_native[3], gui_palette_native[0], false);
+                    draw_text_centered(pixels, width, height, 116 + y_offset, "Drop a GB or GBC", gui_palette_native[3], gui_palette_native[0], false);
+                    draw_text_centered(pixels, width, height, 128 + y_offset, "file to play", gui_palette_native[3], gui_palette_native[0], false);
                     break;
                 case SHOWING_MENU:
-                    draw_text_centered(pixels, 8, "SameBoy", gui_palette_native[3], gui_palette_native[0], false);
+                    draw_text_centered(pixels, width, height, 8 + y_offset, "SameBoy", gui_palette_native[3], gui_palette_native[0], false);
                     unsigned i = 0, y = 24;
                     for (const struct menu_item *item = current_menu; item->string; item++, i++) {
+                        if (i == current_selection && !mouse_scroling) {
+                            if (i == 0) {
+                                if (y < scroll) {
+                                    scroll = (y - 4) / 12 * 12;
+                                    goto rerender;
+                                }
+                            }
+                            else {
+                                if (y < scroll + 24) {
+                                    scroll = (y - 24) / 12 * 12;
+                                    goto rerender;
+                                }
+                            }
+                        }
+                        if (i == current_selection && i == 0 && scroll != 0 && !mouse_scroling) {
+                            scroll = 0;
+                            goto rerender;
+                        }
                         if (item->value_getter && !item->backwards_handler) {
                             char line[25];
-                            snprintf(line, sizeof(line), "%s%*s", item->string, 24 - (int)strlen(item->string), item->value_getter(i));
-                            draw_text_centered(pixels, y, line, gui_palette_native[3], gui_palette_native[0],
+                            snprintf(line, sizeof(line), "%s%*s", item->string, 24 - (unsigned)strlen(item->string), item->value_getter(i));
+                            draw_text_centered(pixels, width, height, y + y_offset, line, gui_palette_native[3], gui_palette_native[0],
                                                i == current_selection ? DECORATION_SELECTION : DECORATION_NONE);
                             y += 12;
                             
                         }
                         else {
-                            draw_text_centered(pixels, y, item->string, gui_palette_native[3], gui_palette_native[0],
+                            draw_text_centered(pixels, width, height, y + y_offset, item->string, gui_palette_native[3], gui_palette_native[0],
                                                i == current_selection && !item->value_getter ? DECORATION_SELECTION : DECORATION_NONE);
                             y += 12;
                             if (item->value_getter) {
-                                draw_text_centered(pixels, y, item->value_getter(i), gui_palette_native[3], gui_palette_native[0],
+                                draw_text_centered(pixels, width, height, y + y_offset - 1, item->value_getter(i), gui_palette_native[3], gui_palette_native[0],
                                                    i == current_selection ? DECORATION_ARROWS : DECORATION_NONE);
                                 y += 12;
                             }
                         }
+                        if (i == current_selection && !mouse_scroling) {
+                            if (y > scroll + 144) {
+                                scroll = (y - 144) / 12 * 12;
+                                if (scroll > menu_height - 144) {
+                                    scroll = menu_height - 144;
+                                }
+                                goto rerender;
+                            }
+                        }
+
+                    }
+                    if (scrollbar_size) {
+                        unsigned scrollbar_offset = (140 - scrollbar_size) * scroll / (menu_height - 144);
+                        if (scrollbar_offset + scrollbar_size > 140) {
+                            scrollbar_offset = 140 - scrollbar_size;
+                        }
+                        for (unsigned y = 0; y < 140; y++) {
+                            uint32_t *pixel = pixels + x_offset + 156 + width * (y + y_offset + 2);
+                            if (y >= scrollbar_offset && y < scrollbar_offset + scrollbar_size) {
+                                pixel[0] = pixel[1]= gui_palette_native[2];
+                            }
+                            else {
+                                pixel[0] = pixel[1]= gui_palette_native[1];
+                            }
+                            
+                        }
                     }
                     break;
                 case SHOWING_HELP:
-                    draw_text(pixels, 2, 2, help[current_help_page], gui_palette_native[3], gui_palette_native[0]);
+                    draw_text(pixels, width, height, 2 + x_offset, 2 + y_offset, help[current_help_page], gui_palette_native[3], gui_palette_native[0], false);
                     break;
                 case WAITING_FOR_KEY:
-                    draw_text_centered(pixels, 68, "Press a Key", gui_palette_native[3], gui_palette_native[0], DECORATION_NONE);
+                    draw_text_centered(pixels, width, height, 68 + y_offset, "Press a Key", gui_palette_native[3], gui_palette_native[0], DECORATION_NONE);
                     break;
                 case WAITING_FOR_JBUTTON:
-                    draw_text_centered(pixels, 68,
+                    draw_text_centered(pixels, width, height, 68 + y_offset,
                                        joypad_configuration_progress != JOYPAD_BUTTONS_MAX ? "Press button for" : "Move the Analog Stick",
                                        gui_palette_native[3], gui_palette_native[0], DECORATION_NONE);
-                    draw_text_centered(pixels, 80,
+                    draw_text_centered(pixels, width, height, 80 + y_offset,
                                       (const char *[])
                                        {
                                            "Right",
@@ -1282,11 +1992,15 @@ void run_gui(bool is_running)
                                            "",
                                        } [joypad_configuration_progress],
                                        gui_palette_native[3], gui_palette_native[0], DECORATION_NONE);
-                    draw_text_centered(pixels, 104, "Press Enter to skip", gui_palette_native[3], gui_palette_native[0], DECORATION_NONE);
+                    draw_text_centered(pixels, width, height, 104 + y_offset, "Press Enter to skip", gui_palette_native[3], gui_palette_native[0], DECORATION_NONE);
                     break;
             }
 
             render_texture(pixels, NULL);
+#ifdef _WIN32
+            /* Required for some Windows 10 machines, god knows why */
+            render_texture(pixels, NULL);
+#endif
         }
-    } while (SDL_WaitEvent(&event));
+    }
 }

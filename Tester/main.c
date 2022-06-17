@@ -16,85 +16,115 @@
 #endif
 
 #include <Core/gb.h>
-
-/* Disable all randomness during automatic tests */
-long random(void)
-{
-    return 0;
-}
+#include <Core/random.h>
 
 static bool running = false;
 static char *filename;
 static char *bmp_filename;
 static char *log_filename;
+static char *sav_filename;
 static FILE *log_file;
 static void replace_extension(const char *src, size_t length, char *dest, const char *ext);
 static bool push_start_a, start_is_not_first, a_is_bad, b_is_confirm, push_faster, push_slower,
-            do_not_stop, push_a_twice, start_is_bad, allow_weird_sp_values, large_stack, push_right;
+            do_not_stop, push_a_twice, start_is_bad, allow_weird_sp_values, large_stack, push_right,
+            semi_random, limit_start, pointer_control, unsafe_speed_switch;
 static unsigned int test_length = 60 * 40;
 GB_gameboy_t gb;
 
 static unsigned int frames = 0;
-const char bmp_header[] = {
-0x42, 0x4D, 0x48, 0x68, 0x01, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x46, 0x00, 0x00, 0x00, 0x38, 0x00,
-0x00, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x70, 0xFF,
-0xFF, 0xFF, 0x01, 0x00, 0x20, 0x00, 0x03, 0x00,
-0x00, 0x00, 0x02, 0x68, 0x01, 0x00, 0x12, 0x0B,
-0x00, 0x00, 0x12, 0x0B, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF,
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+static bool use_tga = false;
+static uint8_t bmp_header[] = {
+    0x42, 0x4D, 0x48, 0x68, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x46, 0x00, 0x00, 0x00, 0x38, 0x00,
+    0x00, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x70, 0xFF,
+    0xFF, 0xFF, 0x01, 0x00, 0x20, 0x00, 0x03, 0x00,
+    0x00, 0x00, 0x02, 0x68, 0x01, 0x00, 0x12, 0x0B,
+    0x00, 0x00, 0x12, 0x0B, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
-uint32_t bitmap[160*144];
+static uint8_t tga_header[] = {
+    0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0xA0, 0x00, 0x90, 0x00,
+    0x20, 0x28,
+};
+
+uint32_t bitmap[256*224];
 
 static char *async_input_callback(GB_gameboy_t *gb)
 {
     return NULL;
 }
 
-static void vblank(GB_gameboy_t *gb)
+static void handle_buttons(GB_gameboy_t *gb)
 {
+    if (!gb->cgb_double_speed && unsafe_speed_switch) {
+        return;
+    }
     /* Do not press any buttons during the last two seconds, this might cause a
-       screenshot to be taken while the LCD is off if the press makes the game
-       load graphics. */
-    if (push_start_a && (frames < test_length - 120 || do_not_stop)) { 
+     screenshot to be taken while the LCD is off if the press makes the game
+     load graphics. */
+    if (push_start_a && (frames < test_length - 120 || do_not_stop)) {
         unsigned combo_length = 40;
         if (start_is_not_first || push_a_twice) combo_length = 60; /* The start item in the menu is not the first, so also push down */
         else if (a_is_bad || start_is_bad) combo_length = 20; /* Pressing A has a negative effect (when trying to start the game). */
-
-        switch ((push_faster ? frames * 2 :
-                 push_slower ? frames / 2 : 
-                 push_a_twice? frames / 4:
-                 frames) % combo_length + (start_is_bad? 20 : 0) ) {
-            case 0:
-                gb->keys[0][push_right? 0 : 7] = true; // Start (Or right) down
-                break;
-            case 10:
-                gb->keys[0][push_right? 0 : 7] = false; // Start (Or right) up
-                break;
-            case 20:
-                gb->keys[0][b_is_confirm? 5: 4] = true; // A down (or B)
-                break;
-            case 30:
-                gb->keys[0][b_is_confirm? 5: 4] = false; // A up (or B)
-                break;
-            case 40:
-                if (push_a_twice) {
-                    gb->keys[0][b_is_confirm? 5: 4] = true; // A down (or B)
-                }
-                else if (gb->boot_rom_finished) {
-                    gb->keys[0][3] = true; // D-Pad Down down
-                }
-                break;
-            case 50:
-                gb->keys[0][b_is_confirm? 5: 4] = false; // A down (or B)
-                gb->keys[0][3] = false; // D-Pad Down up
-                break;
+        
+        if (semi_random) {
+            if (frames % 10 == 0) {
+                unsigned key = (((frames / 20) * 0x1337cafe) >> 29) & 7;
+                gb->keys[0][key] = (frames % 20) == 0;
+            }
+        }
+        else {
+            switch ((push_faster ? frames * 2 :
+                     push_slower ? frames / 2 :
+                     push_a_twice? frames / 4:
+                     frames) % combo_length + (start_is_bad? 20 : 0) ) {
+                case 0:
+                    if (!limit_start || frames < 20 * 60) {
+                        GB_set_key_state(gb, push_right? GB_KEY_RIGHT: GB_KEY_START, true);
+                    }
+                    if (pointer_control) {
+                        GB_set_key_state(gb, GB_KEY_LEFT, true);
+                        GB_set_key_state(gb, GB_KEY_UP, true);
+                    }
+                    
+                    break;
+                case 10:
+                    GB_set_key_state(gb, push_right? GB_KEY_RIGHT: GB_KEY_START, false);
+                    if (pointer_control) {
+                        GB_set_key_state(gb, GB_KEY_LEFT, false);
+                        GB_set_key_state(gb, GB_KEY_UP, false);
+                    }
+                    break;
+                case 20:
+                    GB_set_key_state(gb, b_is_confirm? GB_KEY_B: GB_KEY_A, true);
+                    break;
+                case 30:
+                    GB_set_key_state(gb, b_is_confirm? GB_KEY_B: GB_KEY_A, false);
+                    break;
+                case 40:
+                    if (push_a_twice) {
+                        GB_set_key_state(gb, b_is_confirm? GB_KEY_B: GB_KEY_A, true);
+                    }
+                    else if (gb->boot_rom_finished) {
+                        GB_set_key_state(gb, GB_KEY_DOWN, true);
+                    }
+                    break;
+                case 50:
+                    GB_set_key_state(gb, b_is_confirm? GB_KEY_B: GB_KEY_A, false);
+                    GB_set_key_state(gb, GB_KEY_DOWN, false);
+                    break;
+            }
         }
     }
-    
+
+}
+
+static void vblank(GB_gameboy_t *gb)
+{
     /* Detect common crashes and stop the test early */
     if (frames < test_length - 1) {
         if (gb->backtrace_size >= 0x200 + (large_stack? 0x80: 0) || (!allow_weird_sp_values && (gb->registers[GB_REGISTER_SP] >= 0xfe00 && gb->registers[GB_REGISTER_SP] < 0xff80))) {
@@ -102,26 +132,51 @@ static void vblank(GB_gameboy_t *gb)
                    gb->registers[GB_REGISTER_SP], gb->backtrace_size);
             frames = test_length - 1;
         }
-        if (gb->halted && !gb->interrupt_enable) {
+        if (gb->halted && !gb->interrupt_enable && gb->speed_switch_halt_countdown == 0) {
             GB_log(gb, "The game is deadlocked.\n");
             frames = test_length - 1;
         }
     }
 
-    if (frames >= test_length ) {
+    if (frames >= test_length && !gb->disable_rendering) {
         bool is_screen_blank = true;
-        for (unsigned i = 160*144; i--;) {
-            if (bitmap[i] != bitmap[0]) {
-                is_screen_blank = false;
-                break;
+        if (!gb->sgb) {
+            for (unsigned i = 160 * 144; i--;) {
+                if (bitmap[i] != bitmap[0]) {
+                    is_screen_blank = false;
+                    break;
+                }
+            }
+        }
+        else {
+            if (gb->sgb->mask_mode == 0) {
+                for (unsigned i = 160 * 144; i--;) {
+                    if (gb->sgb->screen_buffer[i] != gb->sgb->screen_buffer[0]) {
+                        is_screen_blank = false;
+                        break;
+                    }
+                }
             }
         }
         
         /* Let the test run for extra four seconds if the screen is off/disabled */
         if (!is_screen_blank || frames >= test_length + 60 * 4) {
             FILE *f = fopen(bmp_filename, "wb");
-            fwrite(&bmp_header, 1, sizeof(bmp_header), f);
-            fwrite(&bitmap, 1, sizeof(bitmap), f);
+            if (use_tga) {
+                tga_header[0xC] = GB_get_screen_width(gb);
+                tga_header[0xD] = GB_get_screen_width(gb) >> 8;
+                tga_header[0xE] = GB_get_screen_height(gb);
+                tga_header[0xF] = GB_get_screen_height(gb) >> 8;
+                fwrite(&tga_header, 1, sizeof(tga_header), f);
+            }
+            else {
+                (*(uint32_t *)&bmp_header[0x2]) = sizeof(bmp_header) + sizeof(bitmap[0]) * GB_get_screen_width(gb) * GB_get_screen_height(gb) + 2;
+                (*(uint32_t *)&bmp_header[0x12]) = GB_get_screen_width(gb);
+                (*(int32_t *)&bmp_header[0x16]) = -GB_get_screen_height(gb);
+                (*(uint32_t *)&bmp_header[0x22]) = sizeof(bitmap[0]) * GB_get_screen_width(gb) * GB_get_screen_height(gb) + 2;
+                fwrite(&bmp_header, 1, sizeof(bmp_header), f);
+            }
+            fwrite(&bitmap, 1, sizeof(bitmap[0]) * GB_get_screen_width(gb) * GB_get_screen_height(gb), f);
             fclose(f);
             if (!gb->boot_rom_finished) {
                 GB_log(gb, "Boot ROM did not finish.\n");
@@ -129,14 +184,15 @@ static void vblank(GB_gameboy_t *gb)
             if (is_screen_blank) {
                 GB_log(gb, "Game probably stuck with blank screen. \n");
             }
+            if (sav_filename) {
+                GB_save_battery(gb, sav_filename);
+            }
             running = false;
         }
     }
-    else if (frames == test_length - 1) {
+    else if (frames >= test_length - 1) {
         gb->disable_rendering = false;
     }
-    
-    frames++;
 }
 
 static void log_callback(GB_gameboy_t *gb, const char *string, GB_log_attributes attributes)
@@ -157,12 +213,12 @@ static const char *executable_folder(void)
     }
     /* Ugly unportable code! :( */
 #ifdef __APPLE__
-    unsigned int length = sizeof(path) - 1;
+    uint32_t length = sizeof(path) - 1;
     _NSGetExecutablePath(&path[0], &length);
 #else
 #ifdef __linux__
-    ssize_t length = readlink("/proc/self/exe", &path[0], sizeof(path) - 1);
-    assert (length != -1);
+    size_t __attribute__((unused)) length = readlink("/proc/self/exe", &path[0], sizeof(path) - 1);
+    assert(length != -1);
 #else
 #ifdef _WIN32
     HMODULE hModule = GetModuleHandle(NULL);
@@ -198,7 +254,17 @@ static char *executable_relative_path(const char *filename)
 
 static uint32_t rgb_encode(GB_gameboy_t *gb, uint8_t r, uint8_t g, uint8_t b)
 {
+#ifdef GB_BIG_ENDIAN
+    if (use_tga) {
+        return (r << 8) | (g << 16) | (b << 24);
+    }
+    return (r << 0) | (g << 8) | (b << 16);
+#else
+    if (use_tga) {
+        return (r << 16) | (g << 8) | (b);
+    }
     return (r << 24) | (g << 16) | (b << 8);
+#endif
 }
 
 static void replace_extension(const char *src, size_t length, char *dest, const char *ext)
@@ -222,12 +288,10 @@ static void replace_extension(const char *src, size_t length, char *dest, const 
 
 int main(int argc, char **argv)
 {
-#define str(x) #x
-#define xstr(x) str(x)
-    fprintf(stderr, "SameBoy Tester v" xstr(VERSION) "\n");
+    fprintf(stderr, "SameBoy Tester v" GB_VERSION "\n");
 
     if (argc == 1) {
-        fprintf(stderr, "Usage: %s [--dmg] [--start] [--length seconds] [--boot path to boot ROM]"
+        fprintf(stderr, "Usage: %s [--dmg] [--sgb] [--cgb] [--start] [--length seconds] [--sav] [--boot path to boot ROM]"
 #ifndef _WIN32
                         " [--jobs number of tests to run simultaneously]"
 #endif
@@ -241,12 +305,37 @@ int main(int argc, char **argv)
 #endif
 
     bool dmg = false;
+    bool sgb = false;
+    bool sav = false;
     const char *boot_rom_path = NULL;
+    
+    GB_random_set_enabled(false);
 
     for (unsigned i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--dmg") == 0) {
             fprintf(stderr, "Using DMG mode\n");
             dmg = true;
+            sgb = false;
+            continue;
+        }
+        
+        if (strcmp(argv[i], "--sgb") == 0) {
+            fprintf(stderr, "Using SGB mode\n");
+            sgb = true;
+            dmg = false;
+            continue;
+        }
+        
+        if (strcmp(argv[i], "--cgb") == 0) {
+            fprintf(stderr, "Using CGB mode\n");
+            dmg = false;
+            sgb = false;
+            continue;
+        }
+        
+        if (strcmp(argv[i], "--tga") == 0) {
+            fprintf(stderr, "Using TGA output\n");
+            use_tga = true;
             continue;
         }
 
@@ -268,6 +357,12 @@ int main(int argc, char **argv)
             continue;
         }
         
+        if (strcmp(argv[i], "--sav") == 0) {
+            fprintf(stderr, "Saving a battery save\n");
+            sav = true;
+            continue;
+        }
+        
 #ifndef _WIN32
         if (strcmp(argv[i], "--jobs") == 0 && i != argc - 1) {
             max_forks = atoi(argv[++i]);
@@ -281,7 +376,7 @@ int main(int argc, char **argv)
         if (max_forks > 1) {
             while (current_forks >= max_forks) {
                 int wait_out;
-                while(wait(&wait_out) == -1);
+                while (wait(&wait_out) == -1);
                 current_forks--;
             }
             
@@ -293,26 +388,39 @@ int main(int argc, char **argv)
         size_t path_length = strlen(filename);
 
         char bitmap_path[path_length + 5]; /* At the worst case, size is strlen(path) + 4 bytes for .bmp + NULL */
-        replace_extension(filename, path_length, bitmap_path, ".bmp");
+        replace_extension(filename, path_length, bitmap_path, use_tga? ".tga" : ".bmp");
         bmp_filename = &bitmap_path[0];
         
         char log_path[path_length + 5];
         replace_extension(filename, path_length, log_path, ".log");
         log_filename = &log_path[0];
         
+        char sav_path[path_length + 5];
+        if (sav) {
+            replace_extension(filename, path_length, sav_path, ".sav");
+            sav_filename = &sav_path[0];
+        }
+        
         fprintf(stderr, "Testing ROM %s\n", filename);
         
         if (dmg) {
             GB_init(&gb, GB_MODEL_DMG_B);
-            if (GB_load_boot_rom(&gb, boot_rom_path? boot_rom_path : executable_relative_path("dmg_boot.bin"))) {
-                perror("Failed to load boot ROM");
+            if (GB_load_boot_rom(&gb, boot_rom_path ?: executable_relative_path("dmg_boot.bin"))) {
+                fprintf(stderr, "Failed to load boot ROM from '%s'\n", boot_rom_path ?: executable_relative_path("dmg_boot.bin"));
+                exit(1);
+            }
+        }
+        else if (sgb) {
+            GB_init(&gb, GB_MODEL_SGB2);
+            if (GB_load_boot_rom(&gb, boot_rom_path ?: executable_relative_path("sgb2_boot.bin"))) {
+                fprintf(stderr, "Failed to load boot ROM from '%s'\n", boot_rom_path ?: executable_relative_path("sgb2_boot.bin"));
                 exit(1);
             }
         }
         else {
             GB_init(&gb, GB_MODEL_CGB_E);
-            if (GB_load_boot_rom(&gb, boot_rom_path? boot_rom_path : executable_relative_path("cgb_boot.bin"))) {
-                perror("Failed to load boot ROM");
+            if (GB_load_boot_rom(&gb, boot_rom_path ?: executable_relative_path("cgb_boot.bin"))) {
+                fprintf(stderr, "Failed to load boot ROM from '%s'\n", boot_rom_path ?: executable_relative_path("cgb_boot.bin"));
                 exit(1);
             }
         }
@@ -322,6 +430,8 @@ int main(int argc, char **argv)
         GB_set_rgb_encode_callback(&gb, rgb_encode);
         GB_set_log_callback(&gb, log_callback);
         GB_set_async_input_callback(&gb, async_input_callback);
+        GB_set_color_correction_mode(&gb, GB_COLOR_CORRECTION_EMULATE_HARDWARE);
+        GB_set_rtc_mode(&gb, GB_RTC_MODE_ACCURATE);
         
         if (GB_load_rom(&gb, filename)) {
             perror("Failed to load ROM");
@@ -336,9 +446,15 @@ int main(int argc, char **argv)
                     /* Restarting in Puzzle Boy/Kwirk (Start followed by A) leaks stack. */
                    strcmp((const char *)(gb.rom + 0x134), "KWIRK") == 0 ||
                    strcmp((const char *)(gb.rom + 0x134), "PUZZLE BOY") == 0;
-        start_is_bad = strcmp((const char *)(gb.rom + 0x134), "BLUESALPHA") == 0;
-        b_is_confirm = strcmp((const char *)(gb.rom + 0x134), "ELITE SOCCER") == 0;
-        push_faster = strcmp((const char *)(gb.rom + 0x134), "MOGURA DE PON!") == 0;
+        start_is_bad = strcmp((const char *)(gb.rom + 0x134), "BLUESALPHA") == 0 ||
+                       strcmp((const char *)(gb.rom + 0x134), "ONI 5") == 0;
+        b_is_confirm = strcmp((const char *)(gb.rom + 0x134), "ELITE SOCCER") == 0 ||
+                       strcmp((const char *)(gb.rom + 0x134), "SOCCER") == 0 ||
+                       strcmp((const char *)(gb.rom + 0x134), "GEX GECKO") == 0 ||
+                       strcmp((const char *)(gb.rom + 0x134), "BABE") == 0;
+        push_faster = strcmp((const char *)(gb.rom + 0x134), "MOGURA DE PON!") == 0 ||
+                      strcmp((const char *)(gb.rom + 0x134), "HUGO2 1/2") == 0 ||
+                      strcmp((const char *)(gb.rom + 0x134), "HUGO") == 0;
         push_slower = strcmp((const char *)(gb.rom + 0x134), "BAKENOU") == 0;
         do_not_stop = strcmp((const char *)(gb.rom + 0x134), "SPACE INVADERS") == 0;
         push_right = memcmp((const char *)(gb.rom + 0x134), "BOB ET BOB", strlen("BOB ET BOB")) == 0 ||
@@ -346,6 +462,9 @@ int main(int argc, char **argv)
                      /* M&M's Minis Madness Demo (which has no menu but the same title as the full game) */
                      (memcmp((const char *)(gb.rom + 0x134), "MINIMADNESSBMIE", strlen("MINIMADNESSBMIE")) == 0 &&
                       gb.rom[0x14e] == 0x6c);
+        /* This game has some terrible menus. */
+        semi_random = strcmp((const char *)(gb.rom + 0x134), "KUKU GAME") == 0;
+        
 
         
         /* This game temporarily sets SP to OAM RAM */
@@ -356,6 +475,10 @@ int main(int argc, char **argv)
         /* This game uses some recursive algorithms and therefore requires quite a large call stack */
         large_stack = memcmp((const char *)(gb.rom + 0x134), "MICRO EPAK1BM", strlen("MICRO EPAK1BM")) == 0 ||
                       strcmp((const char *)(gb.rom + 0x134), "TECMO BOWL") == 0;
+        /* High quality game that leaks stack whenever you open the menu (with start),
+         but requires pressing start to play it. */
+        limit_start = strcmp((const char *)(gb.rom + 0x134), "DIVA STARS") == 0;
+        large_stack |= limit_start;
 
         /* Pressing start while in the map in Tsuri Sensei will leak an internal screen-stack which
            will eventually overflow, override an array of jump-table indexes, jump to a random
@@ -363,18 +486,34 @@ int main(int argc, char **argv)
            will prevent this scenario. */
         push_a_twice = strcmp((const char *)(gb.rom + 0x134), "TURI SENSEI V1") == 0;
 
+        /* Yes, you should totally use a cursor point & click interface for the language select menu. */
+        pointer_control = memcmp((const char *)(gb.rom + 0x134), "LEGO ATEAM BLPP", strlen("LEGO ATEAM BLPP")) == 0;
+        push_faster |= pointer_control;
+        
+        /* Games that perform an unsafe speed switch, don't input until in double speed */
+        unsafe_speed_switch = strcmp((const char *)(gb.rom + 0x134), "GBVideo") == 0 || // lulz this is my fault
+                              strcmp((const char *)(gb.rom + 0x134), "POKEMONGOLD 2") == 0; // Pokemon Adventure
+
+        
         /* Run emulation */
         running = true;
         gb.turbo = gb.turbo_dont_skip = gb.disable_rendering = true;
         frames = 0;
+        unsigned cycles = 0;
         while (running) {
-            GB_run(&gb);
+            cycles += GB_run(&gb);
+            if (cycles >= 139810) { /* Approximately 1/60 a second. Intentionally not the actual length of a frame. */
+                handle_buttons(&gb);
+                cycles -= 139810;
+                frames++;
+            }
             /* This early crash test must not run in vblank because PC might not point to the next instruction. */
             if (gb.pc == 0x38 && frames < test_length - 1 && GB_read_memory(&gb, 0x38) == 0xFF) {
                 GB_log(&gb, "The game is probably stuck in an FF loop.\n");
                 frames = test_length - 1;
             }
         }
+        
         
         if (log_file) {
             fclose(log_file);
@@ -390,7 +529,7 @@ int main(int argc, char **argv)
     }
 #ifndef _WIN32
     int wait_out;
-    while(wait(&wait_out) != -1);
+    while (wait(&wait_out) != -1);
 #endif
     return 0;
 }
