@@ -776,9 +776,9 @@ restart:
     char wgb_save_path[path_length + 8];
     replace_extension(filename, path_length, wgb_save_path, ".widegb");
     //wgb = WGB_init_from_path(wgb_save_path, rgb_encode);
-    wide_gb wgb = { 0 };
-    wgb.next_scene_id = max_scene_id + 1;
-    wgb.active_scene = WGB_create_scene(&wgb);
+    //wide_gb wgb = { 0 };
+    //wgb.next_scene_id = max_scene_id + 1;
+    //wgb.active_scene = WGB_create_scene(&wgb);
     
     screen_size_changed();
 
