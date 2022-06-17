@@ -31,6 +31,7 @@ static double clock_mutliplier = 1.0;
 static char *filename = NULL;
 static typeof(free) *free_function = NULL;
 static char *battery_save_path_ptr = NULL;
+SDL_Texture *texture = NULL;
 static SDL_GLContext gl_context = NULL;
 static bool console_supported = false;
 
