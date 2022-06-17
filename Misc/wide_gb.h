@@ -128,7 +128,7 @@ typedef uint32_t (*WGB_rgb_encode_callback_t)(uint8_t r, uint8_t g, uint8_t b);
 // Return a initialized wide_gb struct with the content of previously
 // saved data.
 // If the path does not contain valid save data, a new wide_gb struct is returned.
-wide_gb WGB_init_from_path(const char *save_path, *WGB_rgb_encode_callback_t **rgb_encode);
+wide_gb WGB_init_from_path(const char *save_path, WGB_rgb_encode_callback_t rgb_encode);
 
 // Save WideGB data to the given path.
 // if the path already exists, it will be overwritten.
