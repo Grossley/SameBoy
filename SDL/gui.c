@@ -250,7 +250,7 @@ void render_texture(void *pixels, void *previous)
         }
         render_bitmap_with_shader(&shader, _pixels, previous,
                                   GB_get_screen_width(&gb), GB_get_screen_height(&gb),
-                                  rect.x, rect.y, rect.w, rect.h,
+                                  viewport.x, viewport.y, viewport.w, viewport.h,
                                   mode);
         SDL_GL_SwapWindow(window);
     }
@@ -391,7 +391,7 @@ void update_viewport(void)
         SDL_FreeSurface(border_surface);
     }
     if (renderer) {
-        SDL_RenderSetViewport(renderer, &rect);
+        SDL_RenderSetViewport(renderer, &viewport);
     }
     window_texture = SDL_CreateTexture(renderer, pixel_format->format, SDL_TEXTUREACCESS_STREAMING, drawable_rect_in_screen.w, drawable_rect_in_screen.h);
     active_window_surface = SDL_CreateRGBSurfaceWithFormat(0, drawable_rect_in_screen.w, drawable_rect_in_screen.h, 32, pixel_format->format);
@@ -1492,8 +1492,8 @@ void convert_mouse_coordinates(signed *x, signed *y)
     signed x_offset = (width - 160) / 2;
     signed y_offset = (height - 144) / 2;
 
-    *x = (signed)(*x - rect.x / factor) * width / (signed)(rect.w / factor) - x_offset;
-    *y = (signed)(*y - rect.y / factor) * height / (signed)(rect.h / factor) - y_offset;
+    *x = (signed)(*x - viewport.x / factor) * width / (signed)(viewport.w / factor) - x_offset;
+    *y = (signed)(*y - viewport.y / factor) * height / (signed)(viewport.h / factor) - y_offset;
 
     if (strcmp("CRT", configuration.filter) == 0) {
         *y = *y * 8 / 7;
