@@ -532,7 +532,7 @@ Palettes:
     dw $7FFF, $7FEA, $7D5F, $0000 ; CGA 1
     dw $4778, $3290, $1D87, $0861 ; DMG LCD
 
-KeyCombinationPalettes
+KeyCombinationPalettes:
     db 1 ; Right
     db 48 ; Left
     db 5 ; Up
