@@ -158,7 +158,7 @@ wide_gb WGB_init_from_path(const char *save_path, WGB_rgb_encode_callback_t rgb_
                 WGB_exact_hash frame_hash;
                 int scene_id;
                 WGB_Point scene_scroll;
-                sscanf(line, "%llu,%i,%i,%i", &frame_hash, &scene_id, &scene_scroll.x, &scene_scroll.y);
+                sscanf(line, "%lu,%i,%i,%i", &frame_hash, &scene_id, &scene_scroll.x, &scene_scroll.y);
 
                 // Create a new scene frame
                 WGB_store_frame_hash(&wgb, frame_hash, scene_id, scene_scroll);
@@ -222,7 +222,7 @@ void WGB_save_to_path(wide_gb *wgb, const char *save_path, WGB_rgb_decode_callba
             // If the scene_frame belongs to the current scene…
             if (scene_frame->scene_id == scene.id) {
                 // Write a line in scene_frames.csv
-                fprintf(frames_file, "%llu,%i,%i,%i\n", scene_frame->frame_hash, scene_frame->scene_id, scene_frame->scene_scroll.x, scene_frame->scene_scroll.y);
+                fprintf(frames_file, "%lu,%i,%i,%i\n", scene_frame->frame_hash, scene_frame->scene_id, scene_frame->scene_scroll.x, scene_frame->scene_scroll.y);
             }
         }
         fclose(frames_file);
