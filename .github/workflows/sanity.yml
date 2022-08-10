@@ -21,6 +21,7 @@ jobs:
       - name: Install deps
         shell: bash
         run: |
+          chmod -R 777 ./
           ./.github/actions/install_deps.sh ${{ matrix.os }}
       - name: Build
         run: |
