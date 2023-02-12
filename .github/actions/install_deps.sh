@@ -1,5 +1,5 @@
 case `echo $1 | cut -d '-' -f 1` in
-        ubuntu)
+        *)
                 sudo apt-get -qq update
                 sudo apt-get install -yq bison libpng-dev pkg-config libsdl2-dev
                 (
@@ -15,9 +15,5 @@ case `echo $1 | cut -d '-' -f 1` in
                 ;;
         macos)
                 brew install rgbds sdl2
-                ;;
-        *)
-                echo "Unsupported OS"
-                exit 1
                 ;;
 esac
